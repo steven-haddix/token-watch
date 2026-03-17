@@ -1,2 +1,7 @@
 @import "tailwindcss";
 @import "@heroui/styles";
+
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  cursor: default;
+}

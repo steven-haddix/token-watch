@@ -26,6 +26,8 @@ pub struct ClaudeUsageResponse {
     pub seven_day_sonnet: Option<WindowUsage>,
     pub subscription_type: String,
     pub extra_usage: ExtraUsage,
+    pub stale: bool,
+    pub retry_after: Option<String>, // ISO timestamp when rate limit lifts
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -43,6 +45,8 @@ pub struct CodexUsageResponse {
     pub secondary_window: CodexWindowUsage,
     pub has_credits: bool,
     pub limit_reached: bool,
+    pub stale: bool,
+    pub retry_after: Option<String>, // ISO timestamp when rate limit lifts
 }
 
 // ── Internal API response shapes ─────────────────────────────────────────────
@@ -144,7 +148,14 @@ pub async fn fetch_claude_usage(
 
     let status = resp.status();
     if status == 429 {
-        return Err("RATE_LIMITED".to_string());
+        let retry_secs: u64 = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60)
+            .max(30); // minimum 30s even if the header says less
+        return Err(format!("RATE_LIMITED:{}", retry_secs));
     }
     if status == 401 {
         return Err("UNAUTHORIZED".to_string());
@@ -169,6 +180,8 @@ pub async fn fetch_claude_usage(
             used_credits: raw.extra_usage.used_credits,
             utilization: raw.extra_usage.utilization,
         },
+        stale: false,
+        retry_after: None,
     })
 }
 
@@ -214,7 +227,13 @@ pub async fn fetch_codex_usage(
 
     let status = resp.status();
     if status == 429 {
-        return Err("RATE_LIMITED".to_string());
+        let retry_secs: u64 = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60);
+        return Err(format!("RATE_LIMITED:{}", retry_secs));
     }
     if status == 401 {
         return Err("UNAUTHORIZED".to_string());
@@ -244,6 +263,8 @@ pub async fn fetch_codex_usage(
         },
         has_credits: raw.credits.has_credits,
         limit_reached: raw.rate_limit.limit_reached,
+        stale: false,
+        retry_after: None,
     })
 }
 

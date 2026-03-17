@@ -36,7 +36,12 @@ pub fn read_claude_credentials() -> Result<ClaudeCredentials, String> {
         .map_err(|e| format!("Failed to run security command: {}", e))?;
 
     if !output.status.success() {
-        return Err("Claude Code credentials not found in keychain. Is Claude Code installed and logged in?".to_string());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "security command failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr.trim()
+        ));
     }
 
     let raw = String::from_utf8(output.stdout)

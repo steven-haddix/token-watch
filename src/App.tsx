@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import {
   Card,
   CardHeader,
@@ -10,6 +11,7 @@ import {
 } from "@heroui/react";
 import { useClaudeUsage, useCodexUsage, formatTimeUntil } from "./hooks/useUsage";
 import type { WindowUsage, CodexWindowUsage } from "./types";
+import CompactView from "./CompactView";
 
 function progressColor(remaining: number): "success" | "warning" | "danger" {
   if (remaining > 50) return "success";
@@ -34,14 +36,14 @@ function WindowRow({ label, window: w }: WindowRowProps) {
   const color = progressColor(w.remaining);
   const resetIn = formatTimeUntil(w.resets_at);
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex justify-between items-center">
-        <span className="text-xs font-medium text-default-600">{label}</span>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex justify-between items-baseline">
+        <span className="text-sm font-medium">{label}</span>
         <span className="text-xs text-default-400">
-          {Math.round(w.remaining)}% remaining · resets in {resetIn}
+          <span className="font-medium text-default-600">{Math.round(w.remaining)}%</span> · resets in {resetIn}
         </span>
       </div>
-      <ProgressBar value={w.utilization} color={color} size="sm" aria-label={label}>
+      <ProgressBar value={w.remaining} color={color} size="sm" aria-label={label}>
         <ProgressBar.Track>
           <ProgressBar.Fill />
         </ProgressBar.Track>
@@ -59,14 +61,14 @@ function CodexWindowRow({ label, window: w }: CodexWindowRowProps) {
   const color = progressColor(w.remaining_percent);
   const resetIn = formatTimeUntil(w.resets_at);
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex justify-between items-center">
-        <span className="text-xs font-medium text-default-600">{label}</span>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex justify-between items-baseline">
+        <span className="text-sm font-medium">{label}</span>
         <span className="text-xs text-default-400">
-          {Math.round(w.remaining_percent)}% remaining · resets in {resetIn}
+          <span className="font-medium text-default-600">{Math.round(w.remaining_percent)}%</span> · resets in {resetIn}
         </span>
       </div>
-      <ProgressBar value={w.used_percent} color={color} size="sm" aria-label={label}>
+      <ProgressBar value={w.remaining_percent} color={color} size="sm" aria-label={label}>
         <ProgressBar.Track>
           <ProgressBar.Fill />
         </ProgressBar.Track>
@@ -76,8 +78,21 @@ function CodexWindowRow({ label, window: w }: CodexWindowRowProps) {
 }
 
 function App() {
+  // Hooks must always be called before any conditional return.
+  const isCompact = new URLSearchParams(window.location.search).get("compact") === "1";
   const claudeUsage = useClaudeUsage();
   const codexUsage = useCodexUsage();
+
+  // Tick every second while any data is stale so the countdown stays live.
+  const [, setTick] = useState(0);
+  const isAnyStale = !!(claudeUsage.data?.stale || codexUsage.data?.stale);
+  useEffect(() => {
+    if (!isAnyStale) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isAnyStale]);
+
+  if (isCompact) return <CompactView />;
 
   const lastUpdated = claudeUsage.lastUpdated ?? codexUsage.lastUpdated;
 
@@ -87,7 +102,17 @@ function App() {
   }
 
   return (
-    <div className="flex flex-col gap-3 p-3 min-h-screen bg-background">
+    <div className="flex flex-col min-h-screen bg-background">
+      {/* Title bar drag region */}
+      <div
+        data-tauri-drag-region
+        className="h-10 flex items-center justify-center bg-background select-none shrink-0"
+      >
+        <span data-tauri-drag-region className="text-xs font-semibold text-default-400 tracking-wide">
+          Token Watch
+        </span>
+      </div>
+    <div className="flex flex-col gap-3 p-3 flex-1">
       {/* Claude Code Card */}
       <Card className="w-full">
         <CardHeader className="flex items-center justify-between pb-1 gap-2">
@@ -98,6 +123,15 @@ function App() {
                 {claudeUsage.data.subscription_type}
               </Chip>
             )}
+            {claudeUsage.data?.stale && (() => {
+              const t = claudeUsage.data!.retry_after;
+              const countdown = t && new Date(t).getTime() > Date.now() ? formatTimeUntil(t) : null;
+              return (
+                <Chip size="sm" variant="soft" color="warning">
+                  {countdown ? `Retry in ${countdown}` : "Rate limited"}
+                </Chip>
+              );
+            })()}
           </div>
           {claudeUsage.loading && !claudeUsage.data && (
             <Spinner size="sm" />
@@ -106,9 +140,21 @@ function App() {
         <Separator />
         <CardContent className="flex flex-col gap-3 pt-3">
           {claudeUsage.error && !claudeUsage.data ? (
-            <p className="text-sm text-danger text-center py-2">
-              Credentials not found. Install and log in to Claude Code.
-            </p>
+            <div className="flex flex-col gap-1 py-2 text-center">
+              <p className="text-sm text-danger">
+                {claudeUsage.error.startsWith("RATE_LIMITED")
+                  ? "Rate limited — no cached data yet."
+                  : "Credentials not found. Install and log in to Claude Code."}
+              </p>
+              {claudeUsage.error.startsWith("RATE_LIMITED_UNTIL:") && (
+                <p className="text-xs text-warning">
+                  Retry in {formatTimeUntil(claudeUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
+                </p>
+              )}
+              {!claudeUsage.error.startsWith("RATE_LIMITED") && (
+                <p className="text-xs text-default-400 break-words">{claudeUsage.error}</p>
+              )}
+            </div>
           ) : claudeUsage.loading && !claudeUsage.data ? (
             <div className="flex justify-center py-2">
               <Spinner size="sm" />
@@ -159,6 +205,15 @@ function App() {
                 Credits
               </Chip>
             )}
+            {codexUsage.data?.stale && (() => {
+              const t = codexUsage.data!.retry_after;
+              const countdown = t && new Date(t).getTime() > Date.now() ? formatTimeUntil(t) : null;
+              return (
+                <Chip size="sm" variant="soft" color="warning">
+                  {countdown ? `Retry in ${countdown}` : "Rate limited"}
+                </Chip>
+              );
+            })()}
           </div>
           {codexUsage.loading && !codexUsage.data && (
             <Spinner size="sm" />
@@ -167,9 +222,18 @@ function App() {
         <Separator />
         <CardContent className="flex flex-col gap-3 pt-3">
           {codexUsage.error && !codexUsage.data ? (
-            <p className="text-sm text-danger text-center py-2">
-              Credentials not found. Install and log in to Codex CLI.
-            </p>
+            <div className="flex flex-col gap-1 py-2 text-center">
+              <p className="text-sm text-danger">
+                {codexUsage.error.startsWith("RATE_LIMITED")
+                  ? "Rate limited — no cached data yet."
+                  : "Credentials not found. Install and log in to Codex CLI."}
+              </p>
+              {codexUsage.error.startsWith("RATE_LIMITED_UNTIL:") && (
+                <p className="text-xs text-warning">
+                  Retry in {formatTimeUntil(codexUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
+                </p>
+              )}
+            </div>
           ) : codexUsage.loading && !codexUsage.data ? (
             <div className="flex justify-center py-2">
               <Spinner size="sm" />
@@ -205,6 +269,7 @@ function App() {
           Refresh
         </Button>
       </div>
+    </div>
     </div>
   );
 }

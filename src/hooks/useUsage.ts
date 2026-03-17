@@ -16,8 +16,10 @@ export function formatTimeUntil(isoString: string): string {
   const diffMs = target - now;
   if (diffMs <= 0) return "now";
   const diffSecs = Math.floor(diffMs / 1000);
-  const hours = Math.floor(diffSecs / 3600);
+  const days = Math.floor(diffSecs / 86400);
+  const hours = Math.floor((diffSecs % 86400) / 3600);
   const minutes = Math.floor((diffSecs % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return "< 1m";

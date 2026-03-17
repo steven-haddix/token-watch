@@ -17,6 +17,8 @@ export interface ClaudeUsageResponse {
   seven_day_sonnet: WindowUsage | null;
   subscription_type: string;
   extra_usage: ExtraUsage;
+  stale: boolean;
+  retry_after: string | null;
 }
 
 export interface CodexWindowUsage {
@@ -32,4 +34,6 @@ export interface CodexUsageResponse {
   secondary_window: CodexWindowUsage;
   has_credits: boolean;
   limit_reached: boolean;
+  stale: boolean;
+  retry_after: string | null;
 }
