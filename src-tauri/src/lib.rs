@@ -63,6 +63,10 @@ pub struct AppState {
     claude_retry_after: RwLock<Option<DateTime<Utc>>>,
     /// Wall-clock time after which Codex API calls are allowed again.
     codex_retry_after: RwLock<Option<DateTime<Utc>>>,
+    /// Serializes concurrent fetches — callers that arrive while a fetch is
+    /// in flight will wait, then get the freshly-cached result on re-check.
+    claude_fetch_lock: tokio::sync::Mutex<()>,
+    codex_fetch_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -85,6 +89,8 @@ impl AppState {
             codex_creds: RwLock::new(None),
             claude_retry_after: RwLock::new(None),
             codex_retry_after: RwLock::new(None),
+            claude_fetch_lock: tokio::sync::Mutex::new(()),
+            codex_fetch_lock: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -130,6 +136,35 @@ async fn get_claude_usage(
         let cache = state.claude_cache.read().await;
         if let Some(data) = cache.get_if_fresh(CLAUDE_TTL) {
             dbg_log!("claude: cache hit");
+            return Ok(data.clone());
+        }
+    }
+
+    // 1b. Serialize concurrent fetches: acquire lock then re-check both the
+    //     cooldown and the cache. Callers queued while a prior fetch was
+    //     in flight (including ones that ended in a 429) exit here without
+    //     hitting the network.
+    let _fetch_guard = state.claude_fetch_lock.lock().await;
+    {
+        let retry_after = state.claude_retry_after.read().await;
+        if let Some(retry_at) = *retry_after {
+            if retry_at > Utc::now() {
+                dbg_log!("claude: cooldown active (after fetch-lock)");
+                let retry_iso = retry_at.to_rfc3339();
+                let cache = state.claude_cache.read().await;
+                if let Some(mut data) = cache.data.clone() {
+                    data.stale = true;
+                    data.retry_after = Some(retry_iso);
+                    return Ok(data);
+                }
+                return Err(format!("RATE_LIMITED_UNTIL:{}", retry_iso));
+            }
+        }
+    }
+    {
+        let cache = state.claude_cache.read().await;
+        if let Some(data) = cache.get_if_fresh(CLAUDE_TTL) {
+            dbg_log!("claude: cache hit (after fetch-lock)");
             return Ok(data.clone());
         }
     }
@@ -255,6 +290,33 @@ async fn get_codex_usage(
         let cache = state.codex_cache.read().await;
         if let Some(data) = cache.get_if_fresh(CODEX_TTL) {
             dbg_log!("codex: cache hit");
+            return Ok(data.clone());
+        }
+    }
+
+    // 1b. Serialize concurrent fetches: acquire lock then re-check both the
+    //     cooldown and the cache.
+    let _fetch_guard = state.codex_fetch_lock.lock().await;
+    {
+        let retry_after = state.codex_retry_after.read().await;
+        if let Some(retry_at) = *retry_after {
+            if retry_at > Utc::now() {
+                dbg_log!("codex: cooldown active (after fetch-lock)");
+                let retry_iso = retry_at.to_rfc3339();
+                let cache = state.codex_cache.read().await;
+                if let Some(mut data) = cache.data.clone() {
+                    data.stale = true;
+                    data.retry_after = Some(retry_iso);
+                    return Ok(data);
+                }
+                return Err(format!("RATE_LIMITED_UNTIL:{}", retry_iso));
+            }
+        }
+    }
+    {
+        let cache = state.codex_cache.read().await;
+        if let Some(data) = cache.get_if_fresh(CODEX_TTL) {
+            dbg_log!("codex: cache hit (after fetch-lock)");
             return Ok(data.clone());
         }
     }

@@ -78,8 +78,12 @@ function CodexWindowRow({ label, window: w }: CodexWindowRowProps) {
 }
 
 function App() {
-  // Hooks must always be called before any conditional return.
   const isCompact = new URLSearchParams(window.location.search).get("compact") === "1";
+  if (isCompact) return <CompactView />;
+  return <FullView />;
+}
+
+function FullView() {
   const claudeUsage = useClaudeUsage();
   const codexUsage = useCodexUsage();
 
@@ -91,8 +95,6 @@ function App() {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, [isAnyStale]);
-
-  if (isCompact) return <CompactView />;
 
   const lastUpdated = claudeUsage.lastUpdated ?? codexUsage.lastUpdated;
 
