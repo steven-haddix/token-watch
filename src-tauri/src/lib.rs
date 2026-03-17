@@ -69,6 +69,12 @@ pub struct AppState {
     codex_fetch_lock: tokio::sync::Mutex<()>,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
