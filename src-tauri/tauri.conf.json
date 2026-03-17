@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "token-watch",
-        "width": 800,
-        "height": 600
+        "title": "Token Watch",
+        "width": 480,
+        "height": 640
       }
     ],
     "security": {
