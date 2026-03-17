@@ -15,6 +15,14 @@ use crate::credentials::{
     read_claude_credentials, read_codex_credentials,
 };
 
+macro_rules! dbg_log {
+    ($($arg:tt)*) => {
+        if cfg!(debug_assertions) {
+            eprintln!("[token-watch {}] {}", chrono::Utc::now().format("%H:%M:%S"), format!($($arg)*));
+        }
+    };
+}
+
 // ── Cache wrapper ─────────────────────────────────────────────────────────────
 
 struct CachedData<T: Clone> {
@@ -104,6 +112,7 @@ async fn get_claude_usage(
         let retry_after = state.claude_retry_after.read().await;
         if let Some(retry_at) = *retry_after {
             if retry_at > Utc::now() {
+                dbg_log!("claude: cooldown active, retry at {}", retry_at.format("%H:%M:%S"));
                 let retry_iso = retry_at.to_rfc3339();
                 let cache = state.claude_cache.read().await;
                 if let Some(mut data) = cache.data.clone() {
@@ -120,6 +129,7 @@ async fn get_claude_usage(
     {
         let cache = state.claude_cache.read().await;
         if let Some(data) = cache.get_if_fresh(CLAUDE_TTL) {
+            dbg_log!("claude: cache hit");
             return Ok(data.clone());
         }
     }
@@ -140,8 +150,10 @@ async fn get_claude_usage(
     };
 
     // 3. Attempt fetch.
+    dbg_log!("claude: cache miss, fetching...");
     match fetch_claude_usage(&state.client, &creds).await {
         Ok(data) => {
+            dbg_log!("claude: fetch succeeded");
             // Clear any lingering rate-limit cooldown on success.
             *state.claude_retry_after.write().await = None;
             let mut cache = state.claude_cache.write().await;
@@ -154,6 +166,7 @@ async fn get_claude_usage(
         }
 
         Err(e) if e == "UNAUTHORIZED" => {
+            dbg_log!("claude: 401, refreshing token...");
             // 4. Refresh token and retry once.
             let refreshed = refresh_claude_token(&state.client, &creds.refresh_token).await?;
             let new_creds = ClaudeCredentials {
@@ -183,6 +196,7 @@ async fn get_claude_usage(
             // 5. Set cooldown, return stale data if available.
             let retry_secs = parse_retry_secs(&e);
             let retry_at = Utc::now() + chrono::Duration::seconds(retry_secs as i64);
+            dbg_log!("claude: rate limited, cooldown set for {}s", retry_secs);
             *state.claude_retry_after.write().await = Some(retry_at);
 
             let mut cache = state.claude_cache.write().await;
@@ -198,6 +212,7 @@ async fn get_claude_usage(
         }
 
         Err(e) if e.contains("Network error") => {
+            dbg_log!("claude: network error — {}", e);
             // 6. On network error, return stale data silently.
             let mut cache = state.claude_cache.write().await;
             cache.stale = true;
@@ -222,6 +237,7 @@ async fn get_codex_usage(
         let retry_after = state.codex_retry_after.read().await;
         if let Some(retry_at) = *retry_after {
             if retry_at > Utc::now() {
+                dbg_log!("codex: cooldown active, retry at {}", retry_at.format("%H:%M:%S"));
                 let retry_iso = retry_at.to_rfc3339();
                 let cache = state.codex_cache.read().await;
                 if let Some(mut data) = cache.data.clone() {
@@ -238,6 +254,7 @@ async fn get_codex_usage(
     {
         let cache = state.codex_cache.read().await;
         if let Some(data) = cache.get_if_fresh(CODEX_TTL) {
+            dbg_log!("codex: cache hit");
             return Ok(data.clone());
         }
     }
@@ -258,8 +275,10 @@ async fn get_codex_usage(
     };
 
     // 3. Attempt fetch.
+    dbg_log!("codex: cache miss, fetching...");
     match fetch_codex_usage(&state.client, &creds).await {
         Ok(data) => {
+            dbg_log!("codex: fetch succeeded");
             // Clear any lingering rate-limit cooldown on success.
             *state.codex_retry_after.write().await = None;
             let mut cache = state.codex_cache.write().await;
@@ -272,6 +291,7 @@ async fn get_codex_usage(
         }
 
         Err(e) if e == "UNAUTHORIZED" => {
+            dbg_log!("codex: 401, refreshing token...");
             // 4. Refresh token and retry once.
             let refreshed = refresh_codex_token(&state.client, &creds.refresh_token).await?;
             let new_creds = CodexCredentials {
@@ -300,6 +320,7 @@ async fn get_codex_usage(
             // 5. Set cooldown, return stale data if available.
             let retry_secs = parse_retry_secs(&e);
             let retry_at = Utc::now() + chrono::Duration::seconds(retry_secs as i64);
+            dbg_log!("codex: rate limited, cooldown set for {}s", retry_secs);
             *state.codex_retry_after.write().await = Some(retry_at);
 
             let mut cache = state.codex_cache.write().await;
@@ -315,6 +336,7 @@ async fn get_codex_usage(
         }
 
         Err(e) if e.contains("Network error") => {
+            dbg_log!("codex: network error — {}", e);
             // 6. On network error, return stale data silently.
             let mut cache = state.codex_cache.write().await;
             cache.stale = true;

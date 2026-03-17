@@ -2,6 +2,14 @@ use reqwest::Client;
 use serde::Deserialize;
 use crate::credentials::{ClaudeCredentials, CodexCredentials};
 
+macro_rules! dbg_log {
+    ($($arg:tt)*) => {
+        if cfg!(debug_assertions) {
+            eprintln!("[token-watch {}] {}", chrono::Utc::now().format("%H:%M:%S"), format!($($arg)*));
+        }
+    };
+}
+
 // ── Public response types ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -138,6 +146,7 @@ pub async fn fetch_claude_usage(
     client: &Client,
     creds: &ClaudeCredentials,
 ) -> Result<ClaudeUsageResponse, String> {
+    dbg_log!("claude: GET /api/oauth/usage");
     let resp = client
         .get("https://api.anthropic.com/api/oauth/usage")
         .header("Authorization", format!("Bearer {}", creds.access_token))
@@ -147,6 +156,7 @@ pub async fn fetch_claude_usage(
         .map_err(|e| format!("Network error fetching Claude usage: {}", e))?;
 
     let status = resp.status();
+    dbg_log!("claude: HTTP {}", status);
     if status == 429 {
         let retry_secs: u64 = resp
             .headers()
@@ -155,6 +165,7 @@ pub async fn fetch_claude_usage(
             .and_then(|s| s.parse().ok())
             .unwrap_or(60)
             .max(30); // minimum 30s even if the header says less
+        dbg_log!("claude: 429 rate limited, retry after {}s", retry_secs);
         return Err(format!("RATE_LIMITED:{}", retry_secs));
     }
     if status == 401 {
@@ -169,6 +180,7 @@ pub async fn fetch_claude_usage(
         .await
         .map_err(|e| format!("Failed to parse Claude usage response: {}", e))?;
 
+    dbg_log!("claude: ok — 5h util={:.1}% 7d util={:.1}%", raw.five_hour.utilization, raw.seven_day.utilization);
     Ok(ClaudeUsageResponse {
         five_hour: to_window_usage(raw.five_hour),
         seven_day: to_window_usage(raw.seven_day),
@@ -217,6 +229,7 @@ pub async fn fetch_codex_usage(
     client: &Client,
     creds: &CodexCredentials,
 ) -> Result<CodexUsageResponse, String> {
+    dbg_log!("codex: GET /backend-api/wham/usage");
     let resp = client
         .get("https://chatgpt.com/backend-api/wham/usage")
         .header("Authorization", format!("Bearer {}", creds.access_token))
@@ -226,6 +239,7 @@ pub async fn fetch_codex_usage(
         .map_err(|e| format!("Network error fetching Codex usage: {}", e))?;
 
     let status = resp.status();
+    dbg_log!("codex: HTTP {}", status);
     if status == 429 {
         let retry_secs: u64 = resp
             .headers()
@@ -233,6 +247,7 @@ pub async fn fetch_codex_usage(
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse().ok())
             .unwrap_or(60);
+        dbg_log!("codex: 429 rate limited, retry after {}s", retry_secs);
         return Err(format!("RATE_LIMITED:{}", retry_secs));
     }
     if status == 401 {
@@ -247,6 +262,7 @@ pub async fn fetch_codex_usage(
         .await
         .map_err(|e| format!("Failed to parse Codex usage response: {}", e))?;
 
+    dbg_log!("codex: ok — primary={:.1}% used 7d={:.1}% used", raw.rate_limit.primary_window.used_percent, raw.rate_limit.secondary_window.used_percent);
     Ok(CodexUsageResponse {
         plan_type: raw.plan_type,
         primary_window: CodexWindowUsage {
