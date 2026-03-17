@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+jobs:
+  check:
+    name: Build Check
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build artifacts
+        uses: actions/cache@v5
+        with:
+          path: src-tauri/target
+          key: ${{ runner.os }}-cargo-build-arm64-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src-tauri/src/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-arm64-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-build-arm64-
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type-check frontend
+        run: bun run build
+
+      - name: Cargo check
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: cd src-tauri && cargo check --target aarch64-apple-darwin
+
+      - name: Clippy
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: cd src-tauri && cargo clippy --target aarch64-apple-darwin -- -D warnings
