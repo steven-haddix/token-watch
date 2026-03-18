@@ -42,6 +42,7 @@ function useUsagePoll<T>(
       setError(null);
       setLastUpdated(new Date());
     } catch (e) {
+      setData(null);
       setError(typeof e === "string" ? e : String(e));
     } finally {
       setLoading(false);
@@ -52,14 +53,42 @@ function useUsagePoll<T>(
     setLoading(true);
     if (intervalRef.current) clearInterval(intervalRef.current);
     fetch();
-    intervalRef.current = setInterval(fetch, intervalMs);
+    if (document.visibilityState === "visible") {
+      intervalRef.current = setInterval(fetch, intervalMs);
+    } else {
+      intervalRef.current = null;
+    }
   }, [fetch, intervalMs]);
 
   useEffect(() => {
-    fetch();
-    intervalRef.current = setInterval(fetch, intervalMs);
+    const stopPolling = () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+
+    const startPolling = () => {
+      stopPolling();
+      setLoading(true);
+      fetch();
+      intervalRef.current = setInterval(fetch, intervalMs);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    onVisibilityChange();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      stopPolling();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [fetch, intervalMs]);
 

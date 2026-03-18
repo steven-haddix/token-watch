@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ProgressBar, Spinner } from "@heroui/react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeUsage, useCodexUsage, formatTimeUntil } from "./hooks/useUsage";
+import type { StaleReason } from "./types";
 
 function progressColor(remaining: number): "success" | "warning" | "danger" {
   if (remaining > 50) return "success";
@@ -52,9 +53,20 @@ function isRateLimited(error: string | null): boolean {
   return !!error?.startsWith("RATE_LIMITED");
 }
 
+function isAuthError(error: string | null): boolean {
+  return error === "AUTH_REQUIRED";
+}
+
 function rateLimitRetryTime(error: string | null): string | null {
   if (!error?.startsWith("RATE_LIMITED_UNTIL:")) return null;
   return error.slice("RATE_LIMITED_UNTIL:".length);
+}
+
+function staleLabel(reason: StaleReason | null, retryAfter: string | null | undefined): string {
+  const countdown = retryLabel(retryAfter);
+  if (reason === "auth_error") return "Auth required";
+  if (reason === "network_error") return "Cached";
+  return countdown ? countdown : "Rate limited";
 }
 
 export default function CompactView() {
@@ -69,9 +81,6 @@ export default function CompactView() {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, [isAnyStale]);
-
-  const claudeCountdown = retryLabel(claudeUsage.data?.retry_after);
-  const codexCountdown = retryLabel(codexUsage.data?.retry_after);
 
   // Retry time from error string when no cached data exists
   const claudeErrorRetry = rateLimitRetryTime(claudeUsage.error);
@@ -94,15 +103,19 @@ export default function CompactView() {
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-semibold text-default-600">Claude Code</span>
           {claudeUsage.data?.stale && (
-            <span className="text-xs text-warning-600">
-              ⚠{claudeCountdown ? ` ${claudeCountdown}` : ""}
+            <span className={`text-xs ${claudeUsage.data.stale_reason === "auth_error" ? "text-danger-600" : "text-warning-600"}`}>
+              {staleLabel(claudeUsage.data.stale_reason, claudeUsage.data.retry_after)}
             </span>
           )}
         </div>
         {claudeUsage.error && !claudeUsage.data ? (
           <div className="flex flex-col gap-0.5">
             <p className="text-xs text-danger">
-              {isRateLimited(claudeUsage.error) ? "Rate limited" : "Not logged in"}
+              {isRateLimited(claudeUsage.error)
+                ? "Rate limited"
+                : isAuthError(claudeUsage.error)
+                  ? "Auth required"
+                  : "Not logged in"}
             </p>
             {claudeErrorRetry && (
               <p className="text-xs text-warning-600">Retry in {retryLabel(claudeErrorRetry) ?? "< 1m"}</p>
@@ -126,15 +139,19 @@ export default function CompactView() {
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-semibold text-default-600">Codex CLI</span>
           {codexUsage.data?.stale && (
-            <span className="text-xs text-warning-600">
-              ⚠{codexCountdown ? ` ${codexCountdown}` : ""}
+            <span className={`text-xs ${codexUsage.data.stale_reason === "auth_error" ? "text-danger-600" : "text-warning-600"}`}>
+              {staleLabel(codexUsage.data.stale_reason, codexUsage.data.retry_after)}
             </span>
           )}
         </div>
         {codexUsage.error && !codexUsage.data ? (
           <div className="flex flex-col gap-0.5">
             <p className="text-xs text-danger">
-              {isRateLimited(codexUsage.error) ? "Rate limited" : "Not logged in"}
+              {isRateLimited(codexUsage.error)
+                ? "Rate limited"
+                : isAuthError(codexUsage.error)
+                  ? "Auth required"
+                  : "Not logged in"}
             </p>
             {codexErrorRetry && (
               <p className="text-xs text-warning-600">Retry in {retryLabel(codexErrorRetry) ?? "< 1m"}</p>

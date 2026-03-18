@@ -35,6 +35,7 @@ pub struct ClaudeUsageResponse {
     pub subscription_type: String,
     pub extra_usage: ExtraUsage,
     pub stale: bool,
+    pub stale_reason: Option<String>,
     pub retry_after: Option<String>, // ISO timestamp when rate limit lifts
 }
 
@@ -54,6 +55,7 @@ pub struct CodexUsageResponse {
     pub has_credits: bool,
     pub limit_reached: bool,
     pub stale: bool,
+    pub stale_reason: Option<String>,
     pub retry_after: Option<String>, // ISO timestamp when rate limit lifts
 }
 
@@ -193,6 +195,7 @@ pub async fn fetch_claude_usage(
             utilization: raw.extra_usage.utilization,
         },
         stale: false,
+        stale_reason: None,
         retry_after: None,
     })
 }
@@ -214,8 +217,17 @@ pub async fn refresh_claude_token(
         .await
         .map_err(|e| format!("Network error refreshing Claude token: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Claude token refresh failed: {}", resp.status()));
+    let status = resp.status();
+    if matches!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST
+            | reqwest::StatusCode::UNAUTHORIZED
+            | reqwest::StatusCode::FORBIDDEN
+    ) {
+        return Err("UNAUTHORIZED".to_string());
+    }
+    if !status.is_success() {
+        return Err(format!("Claude token refresh failed: {}", status));
     }
 
     resp.json::<ClaudeTokenRefreshResponse>()
@@ -280,6 +292,7 @@ pub async fn fetch_codex_usage(
         has_credits: raw.credits.has_credits,
         limit_reached: raw.rate_limit.limit_reached,
         stale: false,
+        stale_reason: None,
         retry_after: None,
     })
 }
@@ -301,8 +314,17 @@ pub async fn refresh_codex_token(
         .await
         .map_err(|e| format!("Network error refreshing Codex token: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Codex token refresh failed: {}", resp.status()));
+    let status = resp.status();
+    if matches!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST
+            | reqwest::StatusCode::UNAUTHORIZED
+            | reqwest::StatusCode::FORBIDDEN
+    ) {
+        return Err("UNAUTHORIZED".to_string());
+    }
+    if !status.is_success() {
+        return Err(format!("Codex token refresh failed: {}", status));
     }
 
     resp.json::<CodexTokenRefreshResponse>()

@@ -10,6 +10,8 @@ export interface ExtraUsage {
   utilization: number | null;
 }
 
+export type StaleReason = "rate_limited" | "network_error" | "auth_error";
+
 export interface ClaudeUsageResponse {
   five_hour: WindowUsage;
   seven_day: WindowUsage;
@@ -18,6 +20,7 @@ export interface ClaudeUsageResponse {
   subscription_type: string;
   extra_usage: ExtraUsage;
   stale: boolean;
+  stale_reason: StaleReason | null;
   retry_after: string | null;
 }
 
@@ -35,5 +38,6 @@ export interface CodexUsageResponse {
   has_credits: boolean;
   limit_reached: boolean;
   stale: boolean;
+  stale_reason: StaleReason | null;
   retry_after: string | null;
 }

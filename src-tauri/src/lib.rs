@@ -110,6 +110,11 @@ fn parse_retry_secs(e: &str) -> u64 {
         .unwrap_or(60)
 }
 
+const AUTH_REQUIRED: &str = "AUTH_REQUIRED";
+const STALE_REASON_RATE_LIMITED: &str = "rate_limited";
+const STALE_REASON_NETWORK_ERROR: &str = "network_error";
+const STALE_REASON_AUTH_ERROR: &str = "auth_error";
+
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
 const CLAUDE_TTL: Duration = Duration::from_secs(120);
@@ -129,6 +134,7 @@ async fn get_claude_usage(
                 let cache = state.claude_cache.read().await;
                 if let Some(mut data) = cache.data.clone() {
                     data.stale = true;
+                    data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
                     data.retry_after = Some(retry_iso);
                     return Ok(data);
                 }
@@ -160,6 +166,7 @@ async fn get_claude_usage(
                 let cache = state.claude_cache.read().await;
                 if let Some(mut data) = cache.data.clone() {
                     data.stale = true;
+                    data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
                     data.retry_after = Some(retry_iso);
                     return Ok(data);
                 }
@@ -209,28 +216,117 @@ async fn get_claude_usage(
         Err(e) if e == "UNAUTHORIZED" => {
             dbg_log!("claude: 401, refreshing token...");
             // 4. Refresh token and retry once.
-            let refreshed = refresh_claude_token(&state.client, &creds.refresh_token).await?;
-            let new_creds = ClaudeCredentials {
-                access_token: refreshed.access_token,
-                refresh_token: refreshed
-                    .refresh_token
-                    .unwrap_or(creds.refresh_token.clone()),
-                expires_at: creds.expires_at,
-                subscription_type: creds.subscription_type.clone(),
-            };
-            {
-                let mut w = state.claude_creds.write().await;
-                *w = Some(new_creds.clone());
+            match refresh_claude_token(&state.client, &creds.refresh_token).await {
+                Ok(refreshed) => {
+                    let new_creds = ClaudeCredentials {
+                        access_token: refreshed.access_token,
+                        refresh_token: refreshed
+                            .refresh_token
+                            .unwrap_or(creds.refresh_token.clone()),
+                        expires_at: creds.expires_at,
+                        subscription_type: creds.subscription_type.clone(),
+                    };
+                    {
+                        let mut w = state.claude_creds.write().await;
+                        *w = Some(new_creds.clone());
+                    }
+                    match fetch_claude_usage(&state.client, &new_creds).await {
+                        Ok(data) => {
+                            dbg_log!("claude: fetch succeeded after refresh");
+                            *state.claude_retry_after.write().await = None;
+                            let mut cache = state.claude_cache.write().await;
+                            *cache = CachedData {
+                                data: Some(data.clone()),
+                                fetched_at: Some(Instant::now()),
+                                stale: false,
+                            };
+                            Ok(data)
+                        }
+                        Err(e) if e.starts_with("RATE_LIMITED") => {
+                            let retry_secs = parse_retry_secs(&e);
+                            let retry_at = Utc::now() + chrono::Duration::seconds(retry_secs as i64);
+                            dbg_log!("claude: rate limited after refresh, cooldown set for {}s", retry_secs);
+                            *state.claude_retry_after.write().await = Some(retry_at);
+
+                            let mut cache = state.claude_cache.write().await;
+                            cache.stale = true;
+                            let retry_iso = retry_at.to_rfc3339();
+                            if let Some(mut stale_data) = cache.data.clone() {
+                                stale_data.stale = true;
+                                stale_data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
+                                stale_data.retry_after = Some(retry_iso);
+                                Ok(stale_data)
+                            } else {
+                                Err(format!("RATE_LIMITED_UNTIL:{}", retry_iso))
+                            }
+                        }
+                        Err(e) if e.contains("Network error") => {
+                            dbg_log!("claude: network error after refresh — {}", e);
+                            let mut cache = state.claude_cache.write().await;
+                            cache.stale = true;
+                            if let Some(mut stale_data) = cache.data.clone() {
+                                stale_data.stale = true;
+                                stale_data.stale_reason = Some(STALE_REASON_NETWORK_ERROR.to_string());
+                                stale_data.retry_after = None;
+                                Ok(stale_data)
+                            } else {
+                                Err(e)
+                            }
+                        }
+                        Err(e) if e == "UNAUTHORIZED" => {
+                            dbg_log!("claude: refreshed token still unauthorized");
+                            *state.claude_retry_after.write().await = None;
+                            let mut creds = state.claude_creds.write().await;
+                            *creds = None;
+                            drop(creds);
+
+                            let mut cache = state.claude_cache.write().await;
+                            cache.stale = true;
+                            if let Some(mut stale_data) = cache.data.clone() {
+                                stale_data.stale = true;
+                                stale_data.stale_reason = Some(STALE_REASON_AUTH_ERROR.to_string());
+                                stale_data.retry_after = None;
+                                Ok(stale_data)
+                            } else {
+                                Err(AUTH_REQUIRED.to_string())
+                            }
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) if e == "UNAUTHORIZED" => {
+                    dbg_log!("claude: refresh token rejected, clearing cached credentials");
+                    *state.claude_retry_after.write().await = None;
+                    let mut creds = state.claude_creds.write().await;
+                    *creds = None;
+                    drop(creds);
+
+                    let mut cache = state.claude_cache.write().await;
+                    cache.stale = true;
+                    if let Some(mut stale_data) = cache.data.clone() {
+                        stale_data.stale = true;
+                        stale_data.stale_reason = Some(STALE_REASON_AUTH_ERROR.to_string());
+                        stale_data.retry_after = None;
+                        Ok(stale_data)
+                    } else {
+                        Err(AUTH_REQUIRED.to_string())
+                    }
+                }
+                Err(e) if e.contains("Network error") => {
+                    dbg_log!("claude: token refresh network error — {}", e);
+                    let mut cache = state.claude_cache.write().await;
+                    cache.stale = true;
+                    if let Some(mut stale_data) = cache.data.clone() {
+                        stale_data.stale = true;
+                        stale_data.stale_reason = Some(STALE_REASON_NETWORK_ERROR.to_string());
+                        stale_data.retry_after = None;
+                        Ok(stale_data)
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
             }
-            let data = fetch_claude_usage(&state.client, &new_creds).await?;
-            *state.claude_retry_after.write().await = None;
-            let mut cache = state.claude_cache.write().await;
-            *cache = CachedData {
-                data: Some(data.clone()),
-                fetched_at: Some(Instant::now()),
-                stale: false,
-            };
-            Ok(data)
         }
 
         Err(e) if e.starts_with("RATE_LIMITED") => {
@@ -245,6 +341,7 @@ async fn get_claude_usage(
             let retry_iso = retry_at.to_rfc3339();
             if let Some(mut stale_data) = cache.data.clone() {
                 stale_data.stale = true;
+                stale_data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
                 stale_data.retry_after = Some(retry_iso);
                 Ok(stale_data)
             } else {
@@ -259,6 +356,8 @@ async fn get_claude_usage(
             cache.stale = true;
             if let Some(mut stale_data) = cache.data.clone() {
                 stale_data.stale = true;
+                stale_data.stale_reason = Some(STALE_REASON_NETWORK_ERROR.to_string());
+                stale_data.retry_after = None;
                 Ok(stale_data)
             } else {
                 Err(e)
@@ -283,6 +382,7 @@ async fn get_codex_usage(
                 let cache = state.codex_cache.read().await;
                 if let Some(mut data) = cache.data.clone() {
                     data.stale = true;
+                    data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
                     data.retry_after = Some(retry_iso);
                     return Ok(data);
                 }
@@ -312,6 +412,7 @@ async fn get_codex_usage(
                 let cache = state.codex_cache.read().await;
                 if let Some(mut data) = cache.data.clone() {
                     data.stale = true;
+                    data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
                     data.retry_after = Some(retry_iso);
                     return Ok(data);
                 }
@@ -361,27 +462,116 @@ async fn get_codex_usage(
         Err(e) if e == "UNAUTHORIZED" => {
             dbg_log!("codex: 401, refreshing token...");
             // 4. Refresh token and retry once.
-            let refreshed = refresh_codex_token(&state.client, &creds.refresh_token).await?;
-            let new_creds = CodexCredentials {
-                access_token: refreshed.access_token,
-                refresh_token: refreshed
-                    .refresh_token
-                    .unwrap_or(creds.refresh_token.clone()),
-                account_id: creds.account_id.clone(),
-            };
-            {
-                let mut w = state.codex_creds.write().await;
-                *w = Some(new_creds.clone());
+            match refresh_codex_token(&state.client, &creds.refresh_token).await {
+                Ok(refreshed) => {
+                    let new_creds = CodexCredentials {
+                        access_token: refreshed.access_token,
+                        refresh_token: refreshed
+                            .refresh_token
+                            .unwrap_or(creds.refresh_token.clone()),
+                        account_id: creds.account_id.clone(),
+                    };
+                    {
+                        let mut w = state.codex_creds.write().await;
+                        *w = Some(new_creds.clone());
+                    }
+                    match fetch_codex_usage(&state.client, &new_creds).await {
+                        Ok(data) => {
+                            dbg_log!("codex: fetch succeeded after refresh");
+                            *state.codex_retry_after.write().await = None;
+                            let mut cache = state.codex_cache.write().await;
+                            *cache = CachedData {
+                                data: Some(data.clone()),
+                                fetched_at: Some(Instant::now()),
+                                stale: false,
+                            };
+                            Ok(data)
+                        }
+                        Err(e) if e.starts_with("RATE_LIMITED") => {
+                            let retry_secs = parse_retry_secs(&e);
+                            let retry_at = Utc::now() + chrono::Duration::seconds(retry_secs as i64);
+                            dbg_log!("codex: rate limited after refresh, cooldown set for {}s", retry_secs);
+                            *state.codex_retry_after.write().await = Some(retry_at);
+
+                            let mut cache = state.codex_cache.write().await;
+                            cache.stale = true;
+                            let retry_iso = retry_at.to_rfc3339();
+                            if let Some(mut stale_data) = cache.data.clone() {
+                                stale_data.stale = true;
+                                stale_data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
+                                stale_data.retry_after = Some(retry_iso);
+                                Ok(stale_data)
+                            } else {
+                                Err(format!("RATE_LIMITED_UNTIL:{}", retry_iso))
+                            }
+                        }
+                        Err(e) if e.contains("Network error") => {
+                            dbg_log!("codex: network error after refresh — {}", e);
+                            let mut cache = state.codex_cache.write().await;
+                            cache.stale = true;
+                            if let Some(mut stale_data) = cache.data.clone() {
+                                stale_data.stale = true;
+                                stale_data.stale_reason = Some(STALE_REASON_NETWORK_ERROR.to_string());
+                                stale_data.retry_after = None;
+                                Ok(stale_data)
+                            } else {
+                                Err(e)
+                            }
+                        }
+                        Err(e) if e == "UNAUTHORIZED" => {
+                            dbg_log!("codex: refreshed token still unauthorized");
+                            *state.codex_retry_after.write().await = None;
+                            let mut creds = state.codex_creds.write().await;
+                            *creds = None;
+                            drop(creds);
+
+                            let mut cache = state.codex_cache.write().await;
+                            cache.stale = true;
+                            if let Some(mut stale_data) = cache.data.clone() {
+                                stale_data.stale = true;
+                                stale_data.stale_reason = Some(STALE_REASON_AUTH_ERROR.to_string());
+                                stale_data.retry_after = None;
+                                Ok(stale_data)
+                            } else {
+                                Err(AUTH_REQUIRED.to_string())
+                            }
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) if e == "UNAUTHORIZED" => {
+                    dbg_log!("codex: refresh token rejected, clearing cached credentials");
+                    *state.codex_retry_after.write().await = None;
+                    let mut creds = state.codex_creds.write().await;
+                    *creds = None;
+                    drop(creds);
+
+                    let mut cache = state.codex_cache.write().await;
+                    cache.stale = true;
+                    if let Some(mut stale_data) = cache.data.clone() {
+                        stale_data.stale = true;
+                        stale_data.stale_reason = Some(STALE_REASON_AUTH_ERROR.to_string());
+                        stale_data.retry_after = None;
+                        Ok(stale_data)
+                    } else {
+                        Err(AUTH_REQUIRED.to_string())
+                    }
+                }
+                Err(e) if e.contains("Network error") => {
+                    dbg_log!("codex: token refresh network error — {}", e);
+                    let mut cache = state.codex_cache.write().await;
+                    cache.stale = true;
+                    if let Some(mut stale_data) = cache.data.clone() {
+                        stale_data.stale = true;
+                        stale_data.stale_reason = Some(STALE_REASON_NETWORK_ERROR.to_string());
+                        stale_data.retry_after = None;
+                        Ok(stale_data)
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
             }
-            let data = fetch_codex_usage(&state.client, &new_creds).await?;
-            *state.codex_retry_after.write().await = None;
-            let mut cache = state.codex_cache.write().await;
-            *cache = CachedData {
-                data: Some(data.clone()),
-                fetched_at: Some(Instant::now()),
-                stale: false,
-            };
-            Ok(data)
         }
 
         Err(e) if e.starts_with("RATE_LIMITED") => {
@@ -396,6 +586,7 @@ async fn get_codex_usage(
             let retry_iso = retry_at.to_rfc3339();
             if let Some(mut stale_data) = cache.data.clone() {
                 stale_data.stale = true;
+                stale_data.stale_reason = Some(STALE_REASON_RATE_LIMITED.to_string());
                 stale_data.retry_after = Some(retry_iso);
                 Ok(stale_data)
             } else {
@@ -410,6 +601,8 @@ async fn get_codex_usage(
             cache.stale = true;
             if let Some(mut stale_data) = cache.data.clone() {
                 stale_data.stale = true;
+                stale_data.stale_reason = Some(STALE_REASON_NETWORK_ERROR.to_string());
+                stale_data.retry_after = None;
                 Ok(stale_data)
             } else {
                 Err(e)

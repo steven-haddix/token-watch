@@ -10,7 +10,7 @@ import {
   Button,
 } from "@heroui/react";
 import { useClaudeUsage, useCodexUsage, formatTimeUntil } from "./hooks/useUsage";
-import type { WindowUsage, CodexWindowUsage } from "./types";
+import type { WindowUsage, CodexWindowUsage, StaleReason } from "./types";
 import CompactView from "./CompactView";
 
 function progressColor(remaining: number): "success" | "warning" | "danger" {
@@ -25,6 +25,28 @@ function formatLastUpdated(date: Date): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function isRateLimitedError(error: string | null): boolean {
+  return !!error?.startsWith("RATE_LIMITED");
+}
+
+function isAuthError(error: string | null): boolean {
+  return error === "AUTH_REQUIRED";
+}
+
+function staleChipColor(reason: StaleReason | null): "default" | "warning" | "danger" {
+  if (reason === "auth_error") return "danger";
+  if (reason === "network_error") return "default";
+  return "warning";
+}
+
+function staleChipLabel(reason: StaleReason | null, retryAfter: string | null | undefined): string {
+  const countdown =
+    retryAfter && new Date(retryAfter).getTime() > Date.now() ? formatTimeUntil(retryAfter) : null;
+  if (reason === "auth_error") return "Auth required";
+  if (reason === "network_error") return "Using cached data";
+  return countdown ? `Retry in ${countdown}` : "Rate limited";
 }
 
 interface WindowRowProps {
@@ -126,11 +148,13 @@ function FullView() {
               </Chip>
             )}
             {claudeUsage.data?.stale && (() => {
-              const t = claudeUsage.data!.retry_after;
-              const countdown = t && new Date(t).getTime() > Date.now() ? formatTimeUntil(t) : null;
               return (
-                <Chip size="sm" variant="soft" color="warning">
-                  {countdown ? `Retry in ${countdown}` : "Rate limited"}
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color={staleChipColor(claudeUsage.data!.stale_reason)}
+                >
+                  {staleChipLabel(claudeUsage.data!.stale_reason, claudeUsage.data!.retry_after)}
                 </Chip>
               );
             })()}
@@ -144,16 +168,18 @@ function FullView() {
           {claudeUsage.error && !claudeUsage.data ? (
             <div className="flex flex-col gap-1 py-2 text-center">
               <p className="text-sm text-danger">
-                {claudeUsage.error.startsWith("RATE_LIMITED")
+                {isRateLimitedError(claudeUsage.error)
                   ? "Rate limited — no cached data yet."
-                  : "Credentials not found. Install and log in to Claude Code."}
+                  : isAuthError(claudeUsage.error)
+                    ? "Authentication expired. Reauthenticate Claude Code."
+                    : "Credentials not found. Install and log in to Claude Code."}
               </p>
-              {claudeUsage.error.startsWith("RATE_LIMITED_UNTIL:") && (
+              {claudeUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
                 <p className="text-xs text-warning">
                   Retry in {formatTimeUntil(claudeUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
                 </p>
               )}
-              {!claudeUsage.error.startsWith("RATE_LIMITED") && (
+              {!isRateLimitedError(claudeUsage.error) && !isAuthError(claudeUsage.error) && (
                 <p className="text-xs text-default-400 break-words">{claudeUsage.error}</p>
               )}
             </div>
@@ -163,6 +189,16 @@ function FullView() {
             </div>
           ) : claudeUsage.data ? (
             <>
+              {claudeUsage.data.stale_reason === "auth_error" && (
+                <p className="text-xs text-danger text-center">
+                  Cached usage shown. Reauthenticate Claude Code to resume live updates.
+                </p>
+              )}
+              {claudeUsage.data.stale_reason === "network_error" && (
+                <p className="text-xs text-default-400 text-center">
+                  Showing cached usage while the latest request failed.
+                </p>
+              )}
               <WindowRow label="5-Hour Window" window={claudeUsage.data.five_hour} />
               <WindowRow label="7-Day Window" window={claudeUsage.data.seven_day} />
 
@@ -208,11 +244,13 @@ function FullView() {
               </Chip>
             )}
             {codexUsage.data?.stale && (() => {
-              const t = codexUsage.data!.retry_after;
-              const countdown = t && new Date(t).getTime() > Date.now() ? formatTimeUntil(t) : null;
               return (
-                <Chip size="sm" variant="soft" color="warning">
-                  {countdown ? `Retry in ${countdown}` : "Rate limited"}
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color={staleChipColor(codexUsage.data!.stale_reason)}
+                >
+                  {staleChipLabel(codexUsage.data!.stale_reason, codexUsage.data!.retry_after)}
                 </Chip>
               );
             })()}
@@ -226,14 +264,19 @@ function FullView() {
           {codexUsage.error && !codexUsage.data ? (
             <div className="flex flex-col gap-1 py-2 text-center">
               <p className="text-sm text-danger">
-                {codexUsage.error.startsWith("RATE_LIMITED")
+                {isRateLimitedError(codexUsage.error)
                   ? "Rate limited — no cached data yet."
-                  : "Credentials not found. Install and log in to Codex CLI."}
+                  : isAuthError(codexUsage.error)
+                    ? "Authentication expired. Reauthenticate Codex CLI."
+                    : "Credentials not found. Install and log in to Codex CLI."}
               </p>
-              {codexUsage.error.startsWith("RATE_LIMITED_UNTIL:") && (
+              {codexUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
                 <p className="text-xs text-warning">
                   Retry in {formatTimeUntil(codexUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
                 </p>
+              )}
+              {!isRateLimitedError(codexUsage.error) && !isAuthError(codexUsage.error) && (
+                <p className="text-xs text-default-400 break-words">{codexUsage.error}</p>
               )}
             </div>
           ) : codexUsage.loading && !codexUsage.data ? (
@@ -242,6 +285,16 @@ function FullView() {
             </div>
           ) : codexUsage.data ? (
             <>
+              {codexUsage.data.stale_reason === "auth_error" && (
+                <p className="text-xs text-danger text-center">
+                  Cached usage shown. Reauthenticate Codex CLI to resume live updates.
+                </p>
+              )}
+              {codexUsage.data.stale_reason === "network_error" && (
+                <p className="text-xs text-default-400 text-center">
+                  Showing cached usage while the latest request failed.
+                </p>
+              )}
               <CodexWindowRow label="5-Hour Window" window={codexUsage.data.primary_window} />
               <CodexWindowRow label="7-Day Window" window={codexUsage.data.secondary_window} />
 
