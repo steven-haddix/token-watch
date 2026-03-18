@@ -35,9 +35,9 @@ function useUsagePoll<T>(
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetch = useCallback(async () => {
+  const fetchUsage = useCallback(async (force = false) => {
     try {
-      const result = await invoke<T>(command);
+      const result = await invoke<T>(command, force ? { force: true } : undefined);
       setData(result);
       setError(null);
       setLastUpdated(new Date());
@@ -52,13 +52,13 @@ function useUsagePoll<T>(
   const refresh = useCallback(() => {
     setLoading(true);
     if (intervalRef.current) clearInterval(intervalRef.current);
-    fetch();
+    fetchUsage(true);
     if (document.visibilityState === "visible") {
-      intervalRef.current = setInterval(fetch, intervalMs);
+      intervalRef.current = setInterval(fetchUsage, intervalMs);
     } else {
       intervalRef.current = null;
     }
-  }, [fetch, intervalMs]);
+  }, [fetchUsage, intervalMs]);
 
   useEffect(() => {
     const stopPolling = () => {
@@ -71,8 +71,8 @@ function useUsagePoll<T>(
     const startPolling = () => {
       stopPolling();
       setLoading(true);
-      fetch();
-      intervalRef.current = setInterval(fetch, intervalMs);
+      fetchUsage();
+      intervalRef.current = setInterval(fetchUsage, intervalMs);
     };
 
     const onVisibilityChange = () => {
@@ -90,7 +90,7 @@ function useUsagePoll<T>(
       stopPolling();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [fetch, intervalMs]);
+  }, [fetchUsage, intervalMs]);
 
   return { data, loading, error, lastUpdated, refresh };
 }

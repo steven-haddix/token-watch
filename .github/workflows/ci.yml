@@ -52,10 +52,18 @@ jobs:
       - name: Type-check frontend
         run: bun run build
 
+      - name: Frontend tests
+        run: bun run test
+
       - name: Cargo check
         env:
           MACOSX_DEPLOYMENT_TARGET: "10.15"
         run: cd src-tauri && cargo check --target aarch64-apple-darwin
+
+      - name: Cargo test
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: cd src-tauri && cargo test --target aarch64-apple-darwin
 
       - name: Clippy
         env:

@@ -1,6 +1,11 @@
+use crate::credentials::{ClaudeCredentials, CodexCredentials};
 use reqwest::Client;
 use serde::Deserialize;
-use crate::credentials::{ClaudeCredentials, CodexCredentials};
+
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 
 macro_rules! dbg_log {
     ($($arg:tt)*) => {
@@ -110,13 +115,13 @@ struct CodexApiResponse {
 
 // ── Refresh token response shapes ────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct ClaudeTokenRefreshResponse {
     pub access_token: String,
     pub refresh_token: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct CodexTokenRefreshResponse {
     pub access_token: String,
     pub refresh_token: Option<String>,
@@ -148,9 +153,17 @@ pub async fn fetch_claude_usage(
     client: &Client,
     creds: &ClaudeCredentials,
 ) -> Result<ClaudeUsageResponse, String> {
+    fetch_claude_usage_from_url(client, CLAUDE_USAGE_URL, creds).await
+}
+
+async fn fetch_claude_usage_from_url(
+    client: &Client,
+    url: &str,
+    creds: &ClaudeCredentials,
+) -> Result<ClaudeUsageResponse, String> {
     dbg_log!("claude: GET /api/oauth/usage");
     let resp = client
-        .get("https://api.anthropic.com/api/oauth/usage")
+        .get(url)
         .header("Authorization", format!("Bearer {}", creds.access_token))
         .header("anthropic-beta", "oauth-2025-04-20")
         .send()
@@ -182,7 +195,11 @@ pub async fn fetch_claude_usage(
         .await
         .map_err(|e| format!("Failed to parse Claude usage response: {}", e))?;
 
-    dbg_log!("claude: ok — 5h util={:.1}% 7d util={:.1}%", raw.five_hour.utilization, raw.seven_day.utilization);
+    dbg_log!(
+        "claude: ok — 5h util={:.1}% 7d util={:.1}%",
+        raw.five_hour.utilization,
+        raw.seven_day.utilization
+    );
     Ok(ClaudeUsageResponse {
         five_hour: to_window_usage(raw.five_hour),
         seven_day: to_window_usage(raw.seven_day),
@@ -204,6 +221,14 @@ pub async fn refresh_claude_token(
     client: &Client,
     refresh_token: &str,
 ) -> Result<ClaudeTokenRefreshResponse, String> {
+    refresh_claude_token_from_url(client, CLAUDE_TOKEN_URL, refresh_token).await
+}
+
+async fn refresh_claude_token_from_url(
+    client: &Client,
+    url: &str,
+    refresh_token: &str,
+) -> Result<ClaudeTokenRefreshResponse, String> {
     let params = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
@@ -211,7 +236,7 @@ pub async fn refresh_claude_token(
     ];
 
     let resp = client
-        .post("https://console.anthropic.com/v1/oauth/token")
+        .post(url)
         .form(&params)
         .send()
         .await
@@ -241,9 +266,17 @@ pub async fn fetch_codex_usage(
     client: &Client,
     creds: &CodexCredentials,
 ) -> Result<CodexUsageResponse, String> {
+    fetch_codex_usage_from_url(client, CODEX_USAGE_URL, creds).await
+}
+
+async fn fetch_codex_usage_from_url(
+    client: &Client,
+    url: &str,
+    creds: &CodexCredentials,
+) -> Result<CodexUsageResponse, String> {
     dbg_log!("codex: GET /backend-api/wham/usage");
     let resp = client
-        .get("https://chatgpt.com/backend-api/wham/usage")
+        .get(url)
         .header("Authorization", format!("Bearer {}", creds.access_token))
         .header("ChatGPT-Account-Id", &creds.account_id)
         .send()
@@ -274,7 +307,11 @@ pub async fn fetch_codex_usage(
         .await
         .map_err(|e| format!("Failed to parse Codex usage response: {}", e))?;
 
-    dbg_log!("codex: ok — primary={:.1}% used 7d={:.1}% used", raw.rate_limit.primary_window.used_percent, raw.rate_limit.secondary_window.used_percent);
+    dbg_log!(
+        "codex: ok — primary={:.1}% used 7d={:.1}% used",
+        raw.rate_limit.primary_window.used_percent,
+        raw.rate_limit.secondary_window.used_percent
+    );
     Ok(CodexUsageResponse {
         plan_type: raw.plan_type,
         primary_window: CodexWindowUsage {
@@ -301,6 +338,14 @@ pub async fn refresh_codex_token(
     client: &Client,
     refresh_token: &str,
 ) -> Result<CodexTokenRefreshResponse, String> {
+    refresh_codex_token_from_url(client, CODEX_TOKEN_URL, refresh_token).await
+}
+
+async fn refresh_codex_token_from_url(
+    client: &Client,
+    url: &str,
+    refresh_token: &str,
+) -> Result<CodexTokenRefreshResponse, String> {
     let body = serde_json::json!({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -308,7 +353,7 @@ pub async fn refresh_codex_token(
     });
 
     let resp = client
-        .post("https://auth.openai.com/oauth/token")
+        .post(url)
         .json(&body)
         .send()
         .await
@@ -330,4 +375,216 @@ pub async fn refresh_codex_token(
     resp.json::<CodexTokenRefreshResponse>()
         .await
         .map_err(|e| format!("Failed to parse Codex token refresh response: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        fetch_claude_usage_from_url, fetch_codex_usage_from_url, refresh_claude_token_from_url,
+        refresh_codex_token_from_url,
+    };
+    use crate::credentials::{ClaudeCredentials, CodexCredentials};
+    use reqwest::Client;
+    use wiremock::matchers::{body_partial_json, body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_client() -> Client {
+        Client::builder().build().unwrap()
+    }
+
+    fn claude_creds() -> ClaudeCredentials {
+        ClaudeCredentials {
+            access_token: "claude-access".to_string(),
+            refresh_token: "claude-refresh".to_string(),
+            expires_at: 0,
+            subscription_type: "pro".to_string(),
+        }
+    }
+
+    fn codex_creds() -> CodexCredentials {
+        CodexCredentials {
+            access_token: "codex-access".to_string(),
+            refresh_token: "codex-refresh".to_string(),
+            account_id: "acct_123".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_claude_usage_sends_required_headers_and_maps_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/claude/usage"))
+            .and(header("authorization", "Bearer claude-access"))
+            .and(header("anthropic-beta", "oauth-2025-04-20"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "five_hour": { "utilization": 42.5, "resets_at": "2026-03-18T16:00:00Z" },
+                "seven_day": { "utilization": 80.0, "resets_at": "2026-03-24T16:00:00Z" },
+                "seven_day_opus": null,
+                "seven_day_sonnet": {
+                    "utilization": 10.0,
+                    "resets_at": "2026-03-24T16:00:00Z"
+                },
+                "extra_usage": {
+                    "is_enabled": true,
+                    "used_credits": 12.0,
+                    "utilization": 5.0
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let response = fetch_claude_usage_from_url(
+            &test_client(),
+            &format!("{}/claude/usage", server.uri()),
+            &claude_creds(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.subscription_type, "pro");
+        assert_eq!(response.five_hour.remaining, 57.5);
+        assert_eq!(response.seven_day.remaining, 20.0);
+        assert_eq!(response.seven_day_sonnet.unwrap().remaining, 90.0);
+        assert!(response.extra_usage.is_enabled);
+        assert!(!response.stale);
+    }
+
+    #[tokio::test]
+    async fn fetch_claude_usage_enforces_minimum_retry_after() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/claude/usage"))
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "5"))
+            .mount(&server)
+            .await;
+
+        let error = fetch_claude_usage_from_url(
+            &test_client(),
+            &format!("{}/claude/usage", server.uri()),
+            &claude_creds(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, "RATE_LIMITED:30");
+    }
+
+    #[tokio::test]
+    async fn fetch_codex_usage_maps_headers_and_windows() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/codex/usage"))
+            .and(header("authorization", "Bearer codex-access"))
+            .and(header("chatgpt-account-id", "acct_123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "limit_reached": false,
+                    "primary_window": { "used_percent": 25.0, "reset_at": 1773859200 },
+                    "secondary_window": { "used_percent": 90.0, "reset_at": 1774464000 }
+                },
+                "credits": { "has_credits": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let response = fetch_codex_usage_from_url(
+            &test_client(),
+            &format!("{}/codex/usage", server.uri()),
+            &codex_creds(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.plan_type, "plus");
+        assert_eq!(response.primary_window.remaining_percent, 75.0);
+        assert_eq!(response.secondary_window.remaining_percent, 10.0);
+        assert!(response.has_credits);
+        assert!(!response.limit_reached);
+    }
+
+    #[tokio::test]
+    async fn fetch_usage_returns_unauthorized_and_parse_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/claude/usage"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let unauthorized = fetch_claude_usage_from_url(
+            &test_client(),
+            &format!("{}/claude/usage", server.uri()),
+            &claude_creds(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(unauthorized, "UNAUTHORIZED");
+
+        server.reset().await;
+
+        Mock::given(method("GET"))
+            .and(path("/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{not-json"))
+            .mount(&server)
+            .await;
+
+        let parse_error = fetch_codex_usage_from_url(
+            &test_client(),
+            &format!("{}/codex/usage", server.uri()),
+            &codex_creds(),
+        )
+        .await
+        .unwrap_err();
+        assert!(parse_error.starts_with("Failed to parse Codex usage response:"));
+    }
+
+    #[tokio::test]
+    async fn refresh_endpoints_map_success_and_auth_failures() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/claude/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .and(body_string_contains("refresh_token=claude-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "new-claude-access",
+                "refresh_token": "new-claude-refresh"
+            })))
+            .mount(&server)
+            .await;
+
+        let refreshed = refresh_claude_token_from_url(
+            &test_client(),
+            &format!("{}/claude/token", server.uri()),
+            "claude-refresh",
+        )
+        .await
+        .unwrap();
+        assert_eq!(refreshed.access_token, "new-claude-access");
+        assert_eq!(
+            refreshed.refresh_token.as_deref(),
+            Some("new-claude-refresh")
+        );
+
+        server.reset().await;
+
+        Mock::given(method("POST"))
+            .and(path("/codex/token"))
+            .and(body_partial_json(serde_json::json!({
+                "grant_type": "refresh_token",
+                "refresh_token": "codex-refresh"
+            })))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let error = refresh_codex_token_from_url(
+            &test_client(),
+            &format!("{}/codex/token", server.uri()),
+            "codex-refresh",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "UNAUTHORIZED");
+    }
 }

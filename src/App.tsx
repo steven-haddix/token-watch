@@ -49,6 +49,15 @@ function staleChipLabel(reason: StaleReason | null, retryAfter: string | null | 
   return countdown ? `Retry in ${countdown}` : "Rate limited";
 }
 
+export function mostRecentDate(...dates: Array<Date | null>): Date | null {
+  const validDates = dates.filter((date): date is Date => date != null);
+  if (validDates.length === 0) return null;
+
+  return validDates.reduce((latest, current) =>
+    current.getTime() > latest.getTime() ? current : latest,
+  );
+}
+
 interface WindowRowProps {
   label: string;
   window: WindowUsage;
@@ -105,7 +114,7 @@ function App() {
   return <FullView />;
 }
 
-function FullView() {
+export function FullView() {
   const claudeUsage = useClaudeUsage();
   const codexUsage = useCodexUsage();
 
@@ -118,7 +127,7 @@ function FullView() {
     return () => clearInterval(id);
   }, [isAnyStale]);
 
-  const lastUpdated = claudeUsage.lastUpdated ?? codexUsage.lastUpdated;
+  const lastUpdated = mostRecentDate(claudeUsage.lastUpdated, codexUsage.lastUpdated);
 
   function handleRefresh() {
     claudeUsage.refresh();

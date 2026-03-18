@@ -31,7 +31,12 @@ struct ClaudeAiOauth {
 
 pub fn read_claude_credentials() -> Result<ClaudeCredentials, String> {
     let output = Command::new("security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
         .output()
         .map_err(|e| format!("Failed to run security command: {}", e))?;
 
@@ -46,17 +51,7 @@ pub fn read_claude_credentials() -> Result<ClaudeCredentials, String> {
 
     let raw = String::from_utf8(output.stdout)
         .map_err(|e| format!("Invalid UTF-8 in keychain output: {}", e))?;
-    let raw = raw.trim();
-
-    let parsed: KeychainJson = serde_json::from_str(raw)
-        .map_err(|e| format!("Failed to parse Claude Code credentials: {}", e))?;
-
-    Ok(ClaudeCredentials {
-        access_token: parsed.claude_ai_oauth.access_token,
-        refresh_token: parsed.claude_ai_oauth.refresh_token,
-        expires_at: parsed.claude_ai_oauth.expires_at,
-        subscription_type: parsed.claude_ai_oauth.subscription_type,
-    })
+    parse_claude_credentials(&raw)
 }
 
 // ── Codex CLI credentials ────────────────────────────────────────────────────
@@ -81,14 +76,34 @@ struct CodexTokens {
 }
 
 pub fn read_codex_credentials() -> Result<CodexCredentials, String> {
-    let home = std::env::var("HOME")
-        .map_err(|_| "HOME environment variable not set".to_string())?;
+    let home =
+        std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     let path = format!("{}/.codex/auth.json", home);
 
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Could not read ~/.codex/auth.json: {}. Is Codex CLI installed and logged in?", e))?;
+    let contents = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "Could not read ~/.codex/auth.json: {}. Is Codex CLI installed and logged in?",
+            e
+        )
+    })?;
 
-    let parsed: CodexAuthJson = serde_json::from_str(&contents)
+    parse_codex_credentials(&contents)
+}
+
+fn parse_claude_credentials(raw: &str) -> Result<ClaudeCredentials, String> {
+    let parsed: KeychainJson = serde_json::from_str(raw.trim())
+        .map_err(|e| format!("Failed to parse Claude Code credentials: {}", e))?;
+
+    Ok(ClaudeCredentials {
+        access_token: parsed.claude_ai_oauth.access_token,
+        refresh_token: parsed.claude_ai_oauth.refresh_token,
+        expires_at: parsed.claude_ai_oauth.expires_at,
+        subscription_type: parsed.claude_ai_oauth.subscription_type,
+    })
+}
+
+fn parse_codex_credentials(contents: &str) -> Result<CodexCredentials, String> {
+    let parsed: CodexAuthJson = serde_json::from_str(contents)
         .map_err(|e| format!("Failed to parse Codex auth.json: {}", e))?;
 
     Ok(CodexCredentials {
@@ -96,4 +111,57 @@ pub fn read_codex_credentials() -> Result<CodexCredentials, String> {
         refresh_token: parsed.tokens.refresh_token,
         account_id: parsed.tokens.account_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_claude_credentials, parse_codex_credentials};
+
+    #[test]
+    fn parses_claude_credentials_from_keychain_json() {
+        let credentials = parse_claude_credentials(
+            r#"
+            {
+              "claudeAiOauth": {
+                "accessToken": "access-a",
+                "refreshToken": "refresh-a",
+                "expiresAt": 123456,
+                "subscriptionType": "pro"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(credentials.access_token, "access-a");
+        assert_eq!(credentials.refresh_token, "refresh-a");
+        assert_eq!(credentials.expires_at, 123456);
+        assert_eq!(credentials.subscription_type, "pro");
+    }
+
+    #[test]
+    fn parses_codex_credentials_from_auth_json() {
+        let credentials = parse_codex_credentials(
+            r#"
+            {
+              "tokens": {
+                "access_token": "access-b",
+                "refresh_token": "refresh-b",
+                "account_id": "acct_123"
+              }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(credentials.access_token, "access-b");
+        assert_eq!(credentials.refresh_token, "refresh-b");
+        assert_eq!(credentials.account_id, "acct_123");
+    }
+
+    #[test]
+    fn surfaces_parse_errors_with_context() {
+        let error = parse_codex_credentials("{oops").unwrap_err();
+        assert!(error.starts_with("Failed to parse Codex auth.json:"));
+    }
 }
