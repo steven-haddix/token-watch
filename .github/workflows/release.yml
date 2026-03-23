@@ -15,6 +15,9 @@ jobs:
   release:
     name: Build & Release macOS DMG
     runs-on: macos-26
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
     permissions:
       contents: write
@@ -57,9 +60,6 @@ jobs:
 
       - name: Validate Apple Developer certificate
         if: ${{ env.APPLE_CERTIFICATE != '' }}
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           CERT_PATH=$RUNNER_TEMP/certificate.p12
 
