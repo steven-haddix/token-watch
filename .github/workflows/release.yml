@@ -84,11 +84,28 @@ jobs:
         if: ${{ env.APPLE_CERTIFICATE != '' }}
         run: security find-identity -v -p codesigning
 
+      - name: Resolve signing identity
+        id: resolve_identity
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        run: |
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning | awk -F '"' '/Developer ID Application: / { print $2; exit }')
+
+          if [ -z "$SIGNING_IDENTITY" ]; then
+            echo "No Developer ID Application identity found in the imported keychain." >&2
+            echo "This release workflow expects a Developer ID Application certificate for macOS DMG signing." >&2
+            echo "Available code-signing identities:" >&2
+            security find-identity -v -p codesigning >&2
+            exit 1
+          fi
+
+          echo "Using signing identity: $SIGNING_IDENTITY"
+          echo "signing_identity=$SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
+
       - name: Build universal DMG
         env:
           # Ensure binary runs on macOS 10.15+ (Tauri 2 minimum)
           MACOSX_DEPLOYMENT_TARGET: "10.15"
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.resolve_identity.outputs.signing_identity || secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
