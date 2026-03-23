@@ -16,8 +16,7 @@ jobs:
     name: Build & Release macOS DMG
     runs-on: macos-26
     env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
 
     permissions:
       contents: write
@@ -59,7 +58,10 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Validate Apple Developer certificate
-        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        if: ${{ env.HAS_APPLE_CERTIFICATE == 'true' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           CERT_PATH=$RUNNER_TEMP/certificate.p12
 
@@ -73,7 +75,7 @@ jobs:
           openssl pkcs12 -in "$CERT_PATH" -info -noout -passin pass:"$APPLE_CERTIFICATE_PASSWORD"
 
       - name: Import Apple Developer certificate
-        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        if: ${{ env.HAS_APPLE_CERTIFICATE == 'true' }}
         uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
@@ -81,12 +83,12 @@ jobs:
           keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
 
       - name: List imported signing identities
-        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        if: ${{ env.HAS_APPLE_CERTIFICATE == 'true' }}
         run: security find-identity -v -p codesigning
 
       - name: Resolve signing identity
         id: resolve_identity
-        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        if: ${{ env.HAS_APPLE_CERTIFICATE == 'true' }}
         run: |
           SIGNING_IDENTITY=$(security find-identity -v -p codesigning | awk -F '"' '/Developer ID Application: / { print $2; exit }')
 
@@ -105,6 +107,8 @@ jobs:
         env:
           # Ensure binary runs on macOS 10.15+ (Tauri 2 minimum)
           MACOSX_DEPLOYMENT_TARGET: "10.15"
+          APPLE_CERTIFICATE: ""
+          APPLE_CERTIFICATE_PASSWORD: ""
           APPLE_SIGNING_IDENTITY: ${{ steps.resolve_identity.outputs.signing_identity || secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
