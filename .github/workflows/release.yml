@@ -107,13 +107,11 @@ jobs:
         env:
           # Ensure binary runs on macOS 10.15+ (Tauri 2 minimum)
           MACOSX_DEPLOYMENT_TARGET: "10.15"
-          APPLE_CERTIFICATE: ""
-          APPLE_CERTIFICATE_PASSWORD: ""
           APPLE_SIGNING_IDENTITY: ${{ steps.resolve_identity.outputs.signing_identity || secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bunx tauri build --target universal-apple-darwin --bundles dmg
+        run: env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD bunx tauri build --target universal-apple-darwin --bundles dmg
 
       - name: Locate DMG artifact
         id: find_dmg
