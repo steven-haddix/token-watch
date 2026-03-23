@@ -55,40 +55,44 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Import Apple Developer certificate
+      - name: Validate Apple Developer certificate
         if: ${{ env.APPLE_CERTIFICATE != '' }}
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "$APPLE_CERTIFICATE" | base64 --decode -o $RUNNER_TEMP/certificate.p12
-          security import "$RUNNER_TEMP/certificate.p12" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+
+          # Decode exactly what GitHub stored without appending a trailing newline.
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$CERT_PATH"
+
+          echo "Decoded certificate size: $(wc -c < "$CERT_PATH") bytes"
+          shasum -a 256 "$CERT_PATH"
+
+          # Fail here if the secret or password does not produce a valid PKCS#12 bundle.
+          openssl pkcs12 -in "$CERT_PATH" -info -noout -passin pass:"$APPLE_CERTIFICATE_PASSWORD"
+
+      - name: Import Apple Developer certificate
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        uses: apple-actions/import-codesign-certs@v6
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+
+      - name: List imported signing identities
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        run: security find-identity -v -p codesigning
 
       - name: Build universal DMG
         env:
           # Ensure binary runs on macOS 10.15+ (Tauri 2 minimum)
           MACOSX_DEPLOYMENT_TARGET: "10.15"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bunx tauri build --target universal-apple-darwin --bundles dmg
-
-      - name: Delete temporary keychain
-        if: ${{ always() && env.APPLE_CERTIFICATE != '' }}
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-        run: security delete-keychain $RUNNER_TEMP/build.keychain || true
 
       - name: Locate DMG artifact
         id: find_dmg
