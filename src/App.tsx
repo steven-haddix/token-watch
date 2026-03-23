@@ -1,9 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   Card,
-  CardHeader,
   CardContent,
-  Separator,
   ProgressBar,
   Chip,
   Spinner,
@@ -18,6 +16,12 @@ function progressColor(remaining: number): "success" | "warning" | "danger" {
   if (remaining >= 20) return "warning";
   return "danger";
 }
+
+const progressTextClass = {
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-danger",
+} as const;
 
 function formatLastUpdated(date: Date): string {
   return date.toLocaleTimeString([], {
@@ -45,14 +49,13 @@ function staleChipLabel(reason: StaleReason | null, retryAfter: string | null | 
   const countdown =
     retryAfter && new Date(retryAfter).getTime() > Date.now() ? formatTimeUntil(retryAfter) : null;
   if (reason === "auth_error") return "Auth required";
-  if (reason === "network_error") return "Using cached data";
+  if (reason === "network_error") return "Cached";
   return countdown ? `Retry in ${countdown}` : "Rate limited";
 }
 
 export function mostRecentDate(...dates: Array<Date | null>): Date | null {
   const validDates = dates.filter((date): date is Date => date != null);
   if (validDates.length === 0) return null;
-
   return validDates.reduce((latest, current) =>
     current.getTime() > latest.getTime() ? current : latest,
   );
@@ -69,9 +72,9 @@ function WindowRow({ label, window: w }: WindowRowProps) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex justify-between items-baseline">
-        <span className="text-sm font-medium">{label}</span>
-        <span className="text-xs text-default-400">
-          <span className="font-medium text-default-600">{Math.round(w.remaining)}%</span> · resets in {resetIn}
+        <span className="text-sm text-muted">{label}</span>
+        <span className={`text-sm font-semibold ${progressTextClass[color]}`}>
+          {Math.round(w.remaining)}%
         </span>
       </div>
       <ProgressBar value={w.remaining} color={color} size="sm" aria-label={label}>
@@ -79,6 +82,7 @@ function WindowRow({ label, window: w }: WindowRowProps) {
           <ProgressBar.Fill />
         </ProgressBar.Track>
       </ProgressBar>
+      <span className="text-xs text-muted">~{resetIn} remaining</span>
     </div>
   );
 }
@@ -94,9 +98,9 @@ function CodexWindowRow({ label, window: w }: CodexWindowRowProps) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex justify-between items-baseline">
-        <span className="text-sm font-medium">{label}</span>
-        <span className="text-xs text-default-400">
-          <span className="font-medium text-default-600">{Math.round(w.remaining_percent)}%</span> · resets in {resetIn}
+        <span className="text-sm text-muted">{label}</span>
+        <span className={`text-sm font-semibold ${progressTextClass[color]}`}>
+          {Math.round(w.remaining_percent)}%
         </span>
       </div>
       <ProgressBar value={w.remaining_percent} color={color} size="sm" aria-label={label}>
@@ -104,6 +108,7 @@ function CodexWindowRow({ label, window: w }: CodexWindowRowProps) {
           <ProgressBar.Fill />
         </ProgressBar.Track>
       </ProgressBar>
+      <span className="text-xs text-muted">~{resetIn} remaining</span>
     </div>
   );
 }
@@ -118,7 +123,6 @@ export function FullView() {
   const claudeUsage = useClaudeUsage();
   const codexUsage = useCodexUsage();
 
-  // Tick every second while any data is stale so the countdown stays live.
   const [, setTick] = useState(0);
   const isAnyStale = !!(claudeUsage.data?.stale || codexUsage.data?.stale);
   useEffect(() => {
@@ -139,82 +143,80 @@ export function FullView() {
       {/* Title bar drag region */}
       <div
         data-tauri-drag-region
-        className="h-10 flex items-center justify-center bg-background select-none shrink-0"
+        className="h-11 flex items-center justify-center bg-background select-none shrink-0"
       >
-        <span data-tauri-drag-region className="text-xs font-semibold text-default-400 tracking-wide">
-          Token Watch
-        </span>
+        <div className="flex items-center gap-2.5" data-tauri-drag-region>
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-400 to-violet-500 shrink-0" />
+          <span data-tauri-drag-region className="text-base font-bold text-foreground">
+            AI Usage
+          </span>
+        </div>
       </div>
-    <div className="flex flex-col gap-3 p-3 flex-1">
-      {/* Claude Code Card */}
-      <Card className="w-full">
-        <CardHeader className="flex items-center justify-between pb-1 gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">Claude Code</span>
-            {claudeUsage.data && (
-              <Chip size="sm" variant="soft" color="accent">
-                {claudeUsage.data.subscription_type}
-              </Chip>
-            )}
-            {claudeUsage.data?.stale && (() => {
-              return (
+
+      <div className="flex flex-col gap-3 p-3 flex-1">
+        {/* Claude Code Card */}
+        <Card className="w-full">
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-orange-400 shrink-0" />
+              <span className="font-semibold text-foreground">Claude</span>
+              {claudeUsage.data && (
+                <Chip size="sm" variant="soft" color="warning">
+                  {claudeUsage.data.subscription_type}
+                </Chip>
+              )}
+              {claudeUsage.data?.stale && (
                 <Chip
                   size="sm"
                   variant="soft"
-                  color={staleChipColor(claudeUsage.data!.stale_reason)}
+                  color={staleChipColor(claudeUsage.data.stale_reason)}
                 >
-                  {staleChipLabel(claudeUsage.data!.stale_reason, claudeUsage.data!.retry_after)}
+                  {staleChipLabel(claudeUsage.data.stale_reason, claudeUsage.data.retry_after)}
                 </Chip>
-              );
-            })()}
-          </div>
-          {claudeUsage.loading && !claudeUsage.data && (
-            <Spinner size="sm" />
-          )}
-        </CardHeader>
-        <Separator />
-        <CardContent className="flex flex-col gap-3 pt-3">
-          {claudeUsage.error && !claudeUsage.data ? (
-            <div className="flex flex-col gap-1 py-2 text-center">
-              <p className="text-sm text-danger">
-                {isRateLimitedError(claudeUsage.error)
-                  ? "Rate limited — no cached data yet."
-                  : isAuthError(claudeUsage.error)
-                    ? "Authentication expired. Reauthenticate Claude Code."
-                    : "Credentials not found. Install and log in to Claude Code."}
-              </p>
-              {claudeUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
-                <p className="text-xs text-warning">
-                  Retry in {formatTimeUntil(claudeUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
-                </p>
               )}
-              {!isRateLimitedError(claudeUsage.error) && !isAuthError(claudeUsage.error) && (
-                <p className="text-xs text-default-400 break-words">{claudeUsage.error}</p>
+              {claudeUsage.loading && !claudeUsage.data && (
+                <Spinner size="sm" className="ml-auto" />
               )}
             </div>
-          ) : claudeUsage.loading && !claudeUsage.data ? (
-            <div className="flex justify-center py-2">
-              <Spinner size="sm" />
-            </div>
-          ) : claudeUsage.data ? (
-            <>
-              {claudeUsage.data.stale_reason === "auth_error" && (
-                <p className="text-xs text-danger text-center">
-                  Cached usage shown. Reauthenticate Claude Code to resume live updates.
+            {claudeUsage.error && !claudeUsage.data ? (
+              <div className="flex flex-col gap-1 py-2 text-center">
+                <p className="text-sm text-danger">
+                  {isRateLimitedError(claudeUsage.error)
+                    ? "Rate limited — no cached data yet."
+                    : isAuthError(claudeUsage.error)
+                      ? "Authentication expired. Reauthenticate Claude Code."
+                      : "Credentials not found. Install and log in to Claude Code."}
                 </p>
-              )}
-              {claudeUsage.data.stale_reason === "network_error" && (
-                <p className="text-xs text-default-400 text-center">
-                  Showing cached usage while the latest request failed.
-                </p>
-              )}
-              <WindowRow label="5-Hour Window" window={claudeUsage.data.five_hour} />
-              <WindowRow label="7-Day Window" window={claudeUsage.data.seven_day} />
+                {claudeUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
+                  <p className="text-xs text-warning">
+                    Retry in {formatTimeUntil(claudeUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
+                  </p>
+                )}
+                {!isRateLimitedError(claudeUsage.error) && !isAuthError(claudeUsage.error) && (
+                  <p className="text-xs text-muted break-words">{claudeUsage.error}</p>
+                )}
+              </div>
+            ) : claudeUsage.loading && !claudeUsage.data ? (
+              <div className="flex justify-center py-2">
+                <Spinner size="sm" />
+              </div>
+            ) : claudeUsage.data ? (
+              <>
+                {claudeUsage.data.stale_reason === "auth_error" && (
+                  <p className="text-xs text-danger text-center">
+                    Cached usage shown. Reauthenticate Claude Code to resume live updates.
+                  </p>
+                )}
+                {claudeUsage.data.stale_reason === "network_error" && (
+                  <p className="text-xs text-muted text-center">
+                    Showing cached usage while the latest request failed.
+                  </p>
+                )}
+                <WindowRow label="5-Hour Window" window={claudeUsage.data.five_hour} />
+                <WindowRow label="7-Day Window" window={claudeUsage.data.seven_day} />
 
-              {(claudeUsage.data.seven_day_opus || claudeUsage.data.seven_day_sonnet) && (
-                <>
-                  <Separator />
-                  <div className="flex flex-col gap-2">
+                {(claudeUsage.data.seven_day_opus || claudeUsage.data.seven_day_sonnet) && (
+                  <div className="border-t border-separator pt-3 flex flex-col gap-3">
                     {claudeUsage.data.seven_day_opus && (
                       <WindowRow label="Opus (7-Day)" window={claudeUsage.data.seven_day_opus} />
                     )}
@@ -222,118 +224,109 @@ export function FullView() {
                       <WindowRow label="Sonnet (7-Day)" window={claudeUsage.data.seven_day_sonnet} />
                     )}
                   </div>
-                </>
-              )}
+                )}
 
-              {claudeUsage.data.extra_usage.is_enabled && (
-                <p className="text-xs text-warning text-center">
-                  Extra usage is enabled
-                  {claudeUsage.data.extra_usage.used_credits != null &&
-                    ` · ${claudeUsage.data.extra_usage.used_credits} credits used`}
-                </p>
-              )}
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
+                {claudeUsage.data.extra_usage.is_enabled && (
+                  <p className="text-xs text-warning text-center">
+                    Extra usage is enabled
+                    {claudeUsage.data.extra_usage.used_credits != null &&
+                      ` · ${claudeUsage.data.extra_usage.used_credits} credits used`}
+                  </p>
+                )}
+              </>
+            ) : null}
+          </CardContent>
+        </Card>
 
-      {/* Codex CLI Card */}
-      <Card className="w-full">
-        <CardHeader className="flex items-center justify-between pb-1 gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">Codex CLI</span>
-            {codexUsage.data && (
-              <Chip size="sm" variant="soft" color="default">
-                {codexUsage.data.plan_type}
-              </Chip>
-            )}
-            {codexUsage.data?.has_credits && (
-              <Chip size="sm" variant="soft" color="success">
-                Credits
-              </Chip>
-            )}
-            {codexUsage.data?.stale && (() => {
-              return (
+        {/* Codex CLI Card */}
+        <Card className="w-full">
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" />
+              <span className="font-semibold text-foreground">Codex</span>
+              {codexUsage.data && (
+                <Chip size="sm" variant="soft" color="accent">
+                  {codexUsage.data.plan_type}
+                </Chip>
+              )}
+              {codexUsage.data?.has_credits && (
+                <Chip size="sm" variant="soft" color="success">
+                  Credits
+                </Chip>
+              )}
+              {codexUsage.data?.stale && (
                 <Chip
                   size="sm"
                   variant="soft"
-                  color={staleChipColor(codexUsage.data!.stale_reason)}
+                  color={staleChipColor(codexUsage.data.stale_reason)}
                 >
-                  {staleChipLabel(codexUsage.data!.stale_reason, codexUsage.data!.retry_after)}
+                  {staleChipLabel(codexUsage.data.stale_reason, codexUsage.data.retry_after)}
                 </Chip>
-              );
-            })()}
-          </div>
-          {codexUsage.loading && !codexUsage.data && (
-            <Spinner size="sm" />
-          )}
-        </CardHeader>
-        <Separator />
-        <CardContent className="flex flex-col gap-3 pt-3">
-          {codexUsage.error && !codexUsage.data ? (
-            <div className="flex flex-col gap-1 py-2 text-center">
-              <p className="text-sm text-danger">
-                {isRateLimitedError(codexUsage.error)
-                  ? "Rate limited — no cached data yet."
-                  : isAuthError(codexUsage.error)
-                    ? "Authentication expired. Reauthenticate Codex CLI."
-                    : "Credentials not found. Install and log in to Codex CLI."}
-              </p>
-              {codexUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
-                <p className="text-xs text-warning">
-                  Retry in {formatTimeUntil(codexUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
-                </p>
               )}
-              {!isRateLimitedError(codexUsage.error) && !isAuthError(codexUsage.error) && (
-                <p className="text-xs text-default-400 break-words">{codexUsage.error}</p>
+              {codexUsage.loading && !codexUsage.data && (
+                <Spinner size="sm" className="ml-auto" />
               )}
             </div>
-          ) : codexUsage.loading && !codexUsage.data ? (
-            <div className="flex justify-center py-2">
-              <Spinner size="sm" />
-            </div>
-          ) : codexUsage.data ? (
-            <>
-              {codexUsage.data.stale_reason === "auth_error" && (
-                <p className="text-xs text-danger text-center">
-                  Cached usage shown. Reauthenticate Codex CLI to resume live updates.
+            {codexUsage.error && !codexUsage.data ? (
+              <div className="flex flex-col gap-1 py-2 text-center">
+                <p className="text-sm text-danger">
+                  {isRateLimitedError(codexUsage.error)
+                    ? "Rate limited — no cached data yet."
+                    : isAuthError(codexUsage.error)
+                      ? "Authentication expired. Reauthenticate Codex CLI."
+                      : "Credentials not found. Install and log in to Codex CLI."}
                 </p>
-              )}
-              {codexUsage.data.stale_reason === "network_error" && (
-                <p className="text-xs text-default-400 text-center">
-                  Showing cached usage while the latest request failed.
-                </p>
-              )}
-              <CodexWindowRow label="5-Hour Window" window={codexUsage.data.primary_window} />
-              <CodexWindowRow label="7-Day Window" window={codexUsage.data.secondary_window} />
+                {codexUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
+                  <p className="text-xs text-warning">
+                    Retry in {formatTimeUntil(codexUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
+                  </p>
+                )}
+                {!isRateLimitedError(codexUsage.error) && !isAuthError(codexUsage.error) && (
+                  <p className="text-xs text-muted break-words">{codexUsage.error}</p>
+                )}
+              </div>
+            ) : codexUsage.loading && !codexUsage.data ? (
+              <div className="flex justify-center py-2">
+                <Spinner size="sm" />
+              </div>
+            ) : codexUsage.data ? (
+              <>
+                {codexUsage.data.stale_reason === "auth_error" && (
+                  <p className="text-xs text-danger text-center">
+                    Cached usage shown. Reauthenticate Codex CLI to resume live updates.
+                  </p>
+                )}
+                {codexUsage.data.stale_reason === "network_error" && (
+                  <p className="text-xs text-muted text-center">
+                    Showing cached usage while the latest request failed.
+                  </p>
+                )}
+                <CodexWindowRow label="5-Hour Window" window={codexUsage.data.primary_window} />
+                <CodexWindowRow label="7-Day Window" window={codexUsage.data.secondary_window} />
 
-              {codexUsage.data.limit_reached && (
-                <p className="text-xs text-danger text-center">
-                  Rate limit reached
-                </p>
-              )}
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
+                {codexUsage.data.limit_reached && (
+                  <p className="text-xs text-danger text-center">Rate limit reached</p>
+                )}
+              </>
+            ) : null}
+          </CardContent>
+        </Card>
 
-      {/* Footer */}
-      <div className="flex items-center justify-between mt-auto px-1">
-        <span className="text-xs text-default-400">
-          {lastUpdated
-            ? `Last updated ${formatLastUpdated(lastUpdated)}`
-            : "Not yet updated"}
-        </span>
-        <Button
-          size="sm"
-          variant="secondary"
-          onPress={handleRefresh}
-          isDisabled={claudeUsage.loading || codexUsage.loading}
-        >
-          Refresh
-        </Button>
+        {/* Footer */}
+        <div className="flex items-center justify-between mt-auto px-1">
+          <span className="text-xs text-muted">
+            {lastUpdated ? `Updated ${formatLastUpdated(lastUpdated)}` : "Not yet updated"}
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            onPress={handleRefresh}
+            isDisabled={claudeUsage.loading || codexUsage.loading}
+          >
+            Refresh
+          </Button>
+        </div>
       </div>
-    </div>
     </div>
   );
 }

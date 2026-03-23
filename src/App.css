@@ -5,3 +5,9 @@
   -webkit-app-region: drag;
   cursor: default;
 }
+
+@layer components {
+  .card {
+    border-radius: 0.75rem;
+  }
+}
