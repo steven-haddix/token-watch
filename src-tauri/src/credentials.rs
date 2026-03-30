@@ -3,7 +3,7 @@ use std::process::Command;
 
 // ── Claude Code credentials ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeCredentials {
     pub access_token: String,
     pub refresh_token: String,
@@ -56,7 +56,7 @@ pub fn read_claude_credentials() -> Result<ClaudeCredentials, String> {
 
 // ── Codex CLI credentials ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexCredentials {
     pub access_token: String,
     pub refresh_token: String,

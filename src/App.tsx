@@ -1,334 +1,221 @@
-import { useState, useEffect } from "react";
-import {
-  Card,
-  CardContent,
-  ProgressBar,
-  Chip,
-  Spinner,
-  Button,
-} from "@heroui/react";
-import { useClaudeUsage, useCodexUsage, formatTimeUntil } from "./hooks/useUsage";
-import type { WindowUsage, CodexWindowUsage, StaleReason } from "./types";
+import { useState } from "react";
+import { Button } from "@heroui/react";
+import { useClaudeUsage, useCodexUsage } from "./hooks/useUsage";
 import CompactView from "./CompactView";
-
-function progressColor(remaining: number): "success" | "warning" | "danger" {
-  if (remaining > 50) return "success";
-  if (remaining >= 20) return "warning";
-  return "danger";
-}
-
-const progressTextClass = {
-  success: "text-success",
-  warning: "text-warning",
-  danger: "text-danger",
-} as const;
+import UsageView from "./UsageView";
+import SchedulingView from "./SchedulingView";
 
 function formatLastUpdated(date: Date): string {
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function isRateLimitedError(error: string | null): boolean {
-  return !!error?.startsWith("RATE_LIMITED");
-}
-
-function isAuthError(error: string | null): boolean {
-  return error === "AUTH_REQUIRED";
-}
-
-function staleChipColor(reason: StaleReason | null): "default" | "warning" | "danger" {
-  if (reason === "auth_error") return "danger";
-  if (reason === "network_error") return "default";
-  return "warning";
-}
-
-function staleChipLabel(reason: StaleReason | null, retryAfter: string | null | undefined): string {
-  const countdown =
-    retryAfter && new Date(retryAfter).getTime() > Date.now() ? formatTimeUntil(retryAfter) : null;
-  if (reason === "auth_error") return "Auth required";
-  if (reason === "network_error") return "Cached";
-  return countdown ? `Retry in ${countdown}` : "Rate limited";
+	return date.toLocaleTimeString([], {
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	});
 }
 
 export function mostRecentDate(...dates: Array<Date | null>): Date | null {
-  const validDates = dates.filter((date): date is Date => date != null);
-  if (validDates.length === 0) return null;
-  return validDates.reduce((latest, current) =>
-    current.getTime() > latest.getTime() ? current : latest,
-  );
-}
-
-interface WindowRowProps {
-  label: string;
-  window: WindowUsage;
-}
-
-function WindowRow({ label, window: w }: WindowRowProps) {
-  const color = progressColor(w.remaining);
-  const resetIn = formatTimeUntil(w.resets_at);
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex justify-between items-baseline">
-        <span className="text-sm text-muted">{label}</span>
-        <span className={`text-sm font-semibold ${progressTextClass[color]}`}>
-          {Math.round(w.remaining)}%
-        </span>
-      </div>
-      <ProgressBar value={w.remaining} color={color} size="sm" aria-label={label}>
-        <ProgressBar.Track>
-          <ProgressBar.Fill />
-        </ProgressBar.Track>
-      </ProgressBar>
-      <span className="text-xs text-muted">~{resetIn} remaining</span>
-    </div>
-  );
-}
-
-interface CodexWindowRowProps {
-  label: string;
-  window: CodexWindowUsage;
-}
-
-function CodexWindowRow({ label, window: w }: CodexWindowRowProps) {
-  const color = progressColor(w.remaining_percent);
-  const resetIn = formatTimeUntil(w.resets_at);
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex justify-between items-baseline">
-        <span className="text-sm text-muted">{label}</span>
-        <span className={`text-sm font-semibold ${progressTextClass[color]}`}>
-          {Math.round(w.remaining_percent)}%
-        </span>
-      </div>
-      <ProgressBar value={w.remaining_percent} color={color} size="sm" aria-label={label}>
-        <ProgressBar.Track>
-          <ProgressBar.Fill />
-        </ProgressBar.Track>
-      </ProgressBar>
-      <span className="text-xs text-muted">~{resetIn} remaining</span>
-    </div>
-  );
+	const validDates = dates.filter((date): date is Date => date != null);
+	if (validDates.length === 0) return null;
+	return validDates.reduce((latest, current) =>
+		current.getTime() > latest.getTime() ? current : latest,
+	);
 }
 
 function App() {
-  const isCompact = new URLSearchParams(window.location.search).get("compact") === "1";
-  if (isCompact) return <CompactView />;
-  return <FullView />;
+	const isCompact =
+		new URLSearchParams(window.location.search).get("compact") === "1";
+	if (isCompact) return <CompactView />;
+	return <FullView />;
 }
 
+type View = "usage" | "scheduling";
+
 export function FullView() {
-  const claudeUsage = useClaudeUsage();
-  const codexUsage = useCodexUsage();
+	const [activeView, setActiveView] = useState<View>("usage");
+	const claudeUsage = useClaudeUsage();
+	const codexUsage = useCodexUsage();
+	const isMac = navigator.userAgent.includes("Mac");
 
-  const [, setTick] = useState(0);
-  const isAnyStale = !!(claudeUsage.data?.stale || codexUsage.data?.stale);
-  useEffect(() => {
-    if (!isAnyStale) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [isAnyStale]);
+	const lastUpdated = mostRecentDate(
+		claudeUsage.lastUpdated,
+		codexUsage.lastUpdated,
+	);
 
-  const lastUpdated = mostRecentDate(claudeUsage.lastUpdated, codexUsage.lastUpdated);
+	function handleRefresh() {
+		claudeUsage.refresh();
+		codexUsage.refresh();
+	}
 
-  function handleRefresh() {
-    claudeUsage.refresh();
-    codexUsage.refresh();
-  }
+	return (
+		<div
+			className={`flex h-screen bg-background overflow-hidden ${isMac ? "pt-4" : ""}`}
+		>
+			{/* Sidebar */}
+			<div className="w-16 md:w-48 flex flex-col border-r border-separator bg-content1/20 shrink-0">
+				{/* Logo/Title */}
+				<div
+					data-tauri-drag-region
+					className="h-14 flex items-center px-4 gap-3 select-none"
+				>
+					<div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-400 to-violet-500 shrink-0" />
+					<span className="hidden md:block font-bold text-foreground truncate">
+						Token Watch
+					</span>
+				</div>
 
-  return (
-    <div className="flex flex-col min-h-screen bg-background">
-      {/* Title bar drag region */}
-      <div
-        data-tauri-drag-region
-        className="h-11 flex items-center justify-center bg-background select-none shrink-0"
-      >
-        <div className="flex items-center gap-2.5" data-tauri-drag-region>
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-400 to-violet-500 shrink-0" />
-          <span data-tauri-drag-region className="text-base font-bold text-foreground">
-            AI Usage
-          </span>
-        </div>
-      </div>
+				<nav className="flex flex-col gap-1 px-2 pt-4 pb-2">
+					<SidebarItem
+						active={activeView === "usage"}
+						onClick={() => setActiveView("usage")}
+						label="Usage"
+						icon={<UsageIcon />}
+					/>
+					<SidebarItem
+						active={activeView === "scheduling"}
+						onClick={() => setActiveView("scheduling")}
+						label="Scheduling"
+						icon={<SchedulingIcon />}
+					/>
+				</nav>
 
-      <div className="flex flex-col gap-3 p-3 flex-1">
-        {/* Claude Code Card */}
-        <Card className="w-full">
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-orange-400 shrink-0" />
-              <span className="font-semibold text-foreground">Claude</span>
-              {claudeUsage.data && (
-                <Chip size="sm" variant="soft" color="warning">
-                  {claudeUsage.data.subscription_type}
-                </Chip>
-              )}
-              {claudeUsage.data?.stale && (
-                <Chip
-                  size="sm"
-                  variant="soft"
-                  color={staleChipColor(claudeUsage.data.stale_reason)}
-                >
-                  {staleChipLabel(claudeUsage.data.stale_reason, claudeUsage.data.retry_after)}
-                </Chip>
-              )}
-              {claudeUsage.loading && !claudeUsage.data && (
-                <Spinner size="sm" className="ml-auto" />
-              )}
-            </div>
-            {claudeUsage.error && !claudeUsage.data ? (
-              <div className="flex flex-col gap-1 py-2 text-center">
-                <p className="text-sm text-danger">
-                  {isRateLimitedError(claudeUsage.error)
-                    ? "Rate limited — no cached data yet."
-                    : isAuthError(claudeUsage.error)
-                      ? "Authentication expired. Reauthenticate Claude Code."
-                      : "Credentials not found. Install and log in to Claude Code."}
-                </p>
-                {claudeUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
-                  <p className="text-xs text-warning">
-                    Retry in {formatTimeUntil(claudeUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
-                  </p>
-                )}
-                {!isRateLimitedError(claudeUsage.error) && !isAuthError(claudeUsage.error) && (
-                  <p className="text-xs text-muted break-words">{claudeUsage.error}</p>
-                )}
-              </div>
-            ) : claudeUsage.loading && !claudeUsage.data ? (
-              <div className="flex justify-center py-2">
-                <Spinner size="sm" />
-              </div>
-            ) : claudeUsage.data ? (
-              <>
-                {claudeUsage.data.stale_reason === "auth_error" && (
-                  <p className="text-xs text-danger text-center">
-                    Cached usage shown. Reauthenticate Claude Code to resume live updates.
-                  </p>
-                )}
-                {claudeUsage.data.stale_reason === "network_error" && (
-                  <p className="text-xs text-muted text-center">
-                    Showing cached usage while the latest request failed.
-                  </p>
-                )}
-                <WindowRow label="5-Hour Window" window={claudeUsage.data.five_hour} />
-                <WindowRow label="7-Day Window" window={claudeUsage.data.seven_day} />
+				{/* Sidebar Footer */}
+				<div className="mt-auto p-4 flex flex-col gap-2">
+					<div className="hidden md:flex flex-col gap-0.5">
+						<span className="text-[10px] uppercase font-bold text-muted-foreground/50 tracking-wider">
+							Last Sync
+						</span>
+						<span className="text-xs text-muted">
+							{lastUpdated ? formatLastUpdated(lastUpdated) : "—"}
+						</span>
+					</div>
+					<Button
+						size="sm"
+						variant="secondary"
+						onPress={handleRefresh}
+						isDisabled={claudeUsage.loading || codexUsage.loading}
+					>
+						<span className="hidden md:inline">Refresh</span>
+						<RefreshIcon
+							className={`w-4 h-4 md:ml-2 ${claudeUsage.loading || codexUsage.loading ? "animate-spin" : ""}`}
+						/>
+					</Button>
+				</div>
+			</div>
 
-                {(claudeUsage.data.seven_day_opus || claudeUsage.data.seven_day_sonnet) && (
-                  <div className="border-t border-separator pt-3 flex flex-col gap-3">
-                    {claudeUsage.data.seven_day_opus && (
-                      <WindowRow label="Opus (7-Day)" window={claudeUsage.data.seven_day_opus} />
-                    )}
-                    {claudeUsage.data.seven_day_sonnet && (
-                      <WindowRow label="Sonnet (7-Day)" window={claudeUsage.data.seven_day_sonnet} />
-                    )}
-                  </div>
-                )}
+			{/* Main Content */}
+			<div className="flex flex-col flex-1 overflow-hidden">
+				{/* Header/Drag area */}
+				<header
+					data-tauri-drag-region
+					className={`h-14 flex items-center justify-between bg-background select-none shrink-0 ${isMac ? "pl-8 pr-6" : "px-6"}`}
+				>
+					<h1 className="text-lg font-semibold text-foreground capitalize">
+						{activeView}
+					</h1>
+					<div className="flex items-center gap-2">
+						{/* Window controls could go here if custom */}
+					</div>
+				</header>
 
-                {claudeUsage.data.extra_usage.is_enabled && (
-                  <p className="text-xs text-warning text-center">
-                    Extra usage is enabled
-                    {claudeUsage.data.extra_usage.used_credits != null &&
-                      ` · ${claudeUsage.data.extra_usage.used_credits} credits used`}
-                  </p>
-                )}
-              </>
-            ) : null}
-          </CardContent>
-        </Card>
+				<main className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar">
+					<div className="max-w-4xl mx-auto">
+						{activeView === "usage" && (
+							<UsageView claudeUsage={claudeUsage} codexUsage={codexUsage} />
+						)}
+						{activeView === "scheduling" && (
+							<SchedulingView
+								claudeUsage={claudeUsage}
+								codexUsage={codexUsage}
+							/>
+						)}
+					</div>
+				</main>
+			</div>
+		</div>
+	);
+}
 
-        {/* Codex CLI Card */}
-        <Card className="w-full">
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" />
-              <span className="font-semibold text-foreground">Codex</span>
-              {codexUsage.data && (
-                <Chip size="sm" variant="soft" color="accent">
-                  {codexUsage.data.plan_type}
-                </Chip>
-              )}
-              {codexUsage.data?.has_credits && (
-                <Chip size="sm" variant="soft" color="success">
-                  Credits
-                </Chip>
-              )}
-              {codexUsage.data?.stale && (
-                <Chip
-                  size="sm"
-                  variant="soft"
-                  color={staleChipColor(codexUsage.data.stale_reason)}
-                >
-                  {staleChipLabel(codexUsage.data.stale_reason, codexUsage.data.retry_after)}
-                </Chip>
-              )}
-              {codexUsage.loading && !codexUsage.data && (
-                <Spinner size="sm" className="ml-auto" />
-              )}
-            </div>
-            {codexUsage.error && !codexUsage.data ? (
-              <div className="flex flex-col gap-1 py-2 text-center">
-                <p className="text-sm text-danger">
-                  {isRateLimitedError(codexUsage.error)
-                    ? "Rate limited — no cached data yet."
-                    : isAuthError(codexUsage.error)
-                      ? "Authentication expired. Reauthenticate Codex CLI."
-                      : "Credentials not found. Install and log in to Codex CLI."}
-                </p>
-                {codexUsage.error?.startsWith("RATE_LIMITED_UNTIL:") && (
-                  <p className="text-xs text-warning">
-                    Retry in {formatTimeUntil(codexUsage.error.slice("RATE_LIMITED_UNTIL:".length))}
-                  </p>
-                )}
-                {!isRateLimitedError(codexUsage.error) && !isAuthError(codexUsage.error) && (
-                  <p className="text-xs text-muted break-words">{codexUsage.error}</p>
-                )}
-              </div>
-            ) : codexUsage.loading && !codexUsage.data ? (
-              <div className="flex justify-center py-2">
-                <Spinner size="sm" />
-              </div>
-            ) : codexUsage.data ? (
-              <>
-                {codexUsage.data.stale_reason === "auth_error" && (
-                  <p className="text-xs text-danger text-center">
-                    Cached usage shown. Reauthenticate Codex CLI to resume live updates.
-                  </p>
-                )}
-                {codexUsage.data.stale_reason === "network_error" && (
-                  <p className="text-xs text-muted text-center">
-                    Showing cached usage while the latest request failed.
-                  </p>
-                )}
-                <CodexWindowRow label="5-Hour Window" window={codexUsage.data.primary_window} />
-                <CodexWindowRow label="7-Day Window" window={codexUsage.data.secondary_window} />
+interface SidebarItemProps {
+	active: boolean;
+	onClick: () => void;
+	label: string;
+	icon: React.ReactNode;
+}
 
-                {codexUsage.data.limit_reached && (
-                  <p className="text-xs text-danger text-center">Rate limit reached</p>
-                )}
-              </>
-            ) : null}
-          </CardContent>
-        </Card>
+function SidebarItem({ active, onClick, label, icon }: SidebarItemProps) {
+	return (
+		<button
+			onClick={onClick}
+			className={`
+        flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200
+        ${
+					active
+						? "bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+						: "text-muted hover:bg-content1/50 hover:text-foreground"
+				}
+      `}
+		>
+			<div className="shrink-0">{icon}</div>
+			<span className="hidden md:block font-medium text-sm">{label}</span>
+		</button>
+	);
+}
 
-        {/* Footer */}
-        <div className="flex items-center justify-between mt-auto px-1">
-          <span className="text-xs text-muted">
-            {lastUpdated ? `Updated ${formatLastUpdated(lastUpdated)}` : "Not yet updated"}
-          </span>
-          <Button
-            size="sm"
-            variant="secondary"
-            onPress={handleRefresh}
-            isDisabled={claudeUsage.loading || codexUsage.loading}
-          >
-            Refresh
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
+function UsageIcon() {
+	return (
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+		>
+			<path d="M3 3v18h18" />
+			<path d="M18 17V9" />
+			<path d="M13 17V5" />
+			<path d="M8 17v-3" />
+		</svg>
+	);
+}
+
+function SchedulingIcon() {
+	return (
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+		>
+			<circle cx="12" cy="12" r="10" />
+			<polyline points="12 6 12 12 16 14" />
+		</svg>
+	);
+}
+
+function RefreshIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			className={className}
+			width="16"
+			height="16"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+		>
+			<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+			<path d="M21 3v5h-5" />
+		</svg>
+	);
 }
 
 export default App;

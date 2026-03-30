@@ -10,4 +10,46 @@
   .card {
     border-radius: 0.75rem;
   }
+
+  /* Slightly downshift HeroUI button sizing app-wide without changing variants. */
+  .button {
+    @apply h-9 gap-1.5 px-3.5 md:h-8;
+  }
+
+  .button--sm {
+    @apply h-8 px-2.5 md:h-7;
+  }
+
+  .button--lg {
+    @apply h-10 px-4 text-sm md:h-9;
+  }
+
+  .button--icon-only {
+    @apply w-9 md:w-8;
+  }
+
+  .button--icon-only.button--sm {
+    @apply w-8 md:w-7;
+  }
+
+  .button--icon-only.button--lg {
+    @apply w-10 md:w-9;
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--heroui-content3);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--heroui-content4);
 }

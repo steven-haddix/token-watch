@@ -28,7 +28,7 @@ impl Clock for SystemClock {
 #[async_trait]
 pub trait UsageOps: Send + Sync + 'static {
     type Data: UsageData;
-    type Credentials: Clone + Send + Sync + 'static;
+    type Credentials: Clone + PartialEq + Send + Sync + 'static;
     type Refresh: Send + Sync + 'static;
 
     fn ttl(&self) -> Duration;
@@ -197,6 +197,20 @@ where
     }
 
     async fn handle_unauthorized(&self, credentials: O::Credentials) -> Result<O::Data, String> {
+        let credentials = match self.reload_credentials_if_changed(&credentials).await {
+            Some(reloaded) => match self.ops.fetch_usage(&reloaded).await {
+                Ok(data) => {
+                    self.store_fresh(data.clone()).await;
+                    return Ok(data);
+                }
+                Err(e) if e == "UNAUTHORIZED" => reloaded,
+                Err(e) if e.starts_with("RATE_LIMITED") => return self.handle_rate_limited(&e).await,
+                Err(e) if is_network_error(&e) => return self.handle_network_error(e).await,
+                Err(e) => return Err(e),
+            },
+            None => credentials,
+        };
+
         match self
             .ops
             .refresh_credentials(self.ops.credentials_refresh_token(&credentials))
@@ -218,16 +232,39 @@ where
                 }
             }
             Err(e) if e == "UNAUTHORIZED" => self.handle_auth_failure().await,
-            Err(e) if is_network_error(&e) => self.handle_network_error(e).await,
-            Err(e) => Err(e),
+            Err(e) if is_network_error(&e) => {
+                self.clear_cached_credentials().await;
+                self.handle_network_error(e).await
+            }
+            Err(e) => {
+                self.clear_cached_credentials().await;
+                Err(e)
+            }
         }
     }
 
     async fn handle_auth_failure(&self) -> Result<O::Data, String> {
         *self.retry_after.write().await = None;
-        *self.credentials.write().await = None;
+        self.clear_cached_credentials().await;
         self.return_stale(STALE_REASON_AUTH_ERROR, None, AUTH_REQUIRED.to_string())
             .await
+    }
+
+    async fn reload_credentials_if_changed(
+        &self,
+        current: &O::Credentials,
+    ) -> Option<O::Credentials> {
+        let reloaded = self.ops.read_credentials().await.ok()?;
+        if &reloaded == current {
+            return None;
+        }
+
+        *self.credentials.write().await = Some(reloaded.clone());
+        Some(reloaded)
+    }
+
+    async fn clear_cached_credentials(&self) {
+        *self.credentials.write().await = None;
     }
 
     async fn handle_rate_limited(&self, error: &str) -> Result<O::Data, String> {
@@ -617,6 +654,7 @@ mod tests {
         let (manager, ops, _clock) = test_manager(300);
         ops.push_read(Ok(creds("expired-token", "refresh-a")));
         ops.push_fetch(Err("UNAUTHORIZED".to_string()));
+        ops.push_read(Ok(creds("expired-token", "refresh-a")));
         ops.push_refresh(Ok(TestRefresh {
             access_token: "fresh-token".to_string(),
             refresh_token: Some("refresh-b".to_string()),
@@ -633,10 +671,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unauthorized_fetch_reloads_new_credentials_before_refreshing() {
+        let (manager, ops, _clock) = test_manager(300);
+        ops.push_read(Ok(creds("expired-token", "refresh-a")));
+        ops.push_fetch(Err("UNAUTHORIZED".to_string()));
+        ops.push_read(Ok(creds("fresh-token", "refresh-b")));
+        ops.push_fetch(Ok(TestData::fresh("live-b")));
+
+        let data = manager.get_usage(false).await.unwrap();
+        assert_eq!(data.value, "live-b");
+        assert_eq!(ops.read_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(ops.refresh_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            ops.fetch_tokens.lock().unwrap().clone(),
+            vec!["expired-token".to_string(), "fresh-token".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn auth_failure_clears_cached_credentials_and_surfaces_auth_required() {
         let (manager, ops, _clock) = test_manager(300);
         ops.push_read(Ok(creds("expired-token", "refresh-a")));
         ops.push_fetch(Err("UNAUTHORIZED".to_string()));
+        ops.push_read(Ok(creds("expired-token", "refresh-a")));
         ops.push_refresh(Err("UNAUTHORIZED".to_string()));
         ops.push_read(Ok(creds("new-token", "refresh-b")));
         ops.push_fetch(Ok(TestData::fresh("live-c")));
@@ -646,8 +703,26 @@ mod tests {
 
         let recovered = manager.get_usage(false).await.unwrap();
         assert_eq!(recovered.value, "live-c");
-        assert_eq!(ops.read_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(ops.read_calls.load(Ordering::SeqCst), 3);
         assert_eq!(ops.refresh_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_failure_clears_cached_credentials_for_next_attempt() {
+        let (manager, ops, _clock) = test_manager(300);
+        ops.push_read(Ok(creds("expired-token", "refresh-a")));
+        ops.push_fetch(Err("UNAUTHORIZED".to_string()));
+        ops.push_read(Ok(creds("expired-token", "refresh-a")));
+        ops.push_refresh(Err("Claude token refresh failed: 429 Too Many Requests".to_string()));
+        ops.push_read(Ok(creds("fresh-token", "refresh-b")));
+        ops.push_fetch(Ok(TestData::fresh("live-b")));
+
+        let error = manager.get_usage(false).await.unwrap_err();
+        assert_eq!(error, "Claude token refresh failed: 429 Too Many Requests");
+
+        let recovered = manager.get_usage(false).await.unwrap();
+        assert_eq!(recovered.value, "live-b");
+        assert_eq!(ops.read_calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
@@ -683,6 +758,7 @@ mod tests {
         ops.push_read(Ok(creds("token-a", "refresh-a")));
         ops.push_fetch(Ok(TestData::fresh("live-a")));
         ops.push_fetch(Err("UNAUTHORIZED".to_string()));
+        ops.push_read(Ok(creds("token-a", "refresh-a")));
         ops.push_refresh(Err("UNAUTHORIZED".to_string()));
 
         let initial = manager.get_usage(false).await.unwrap();
