@@ -1,9 +1,12 @@
 pub mod api;
 pub mod credentials;
+pub mod dispatch;
 pub mod usage_manager;
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use std::time::Duration;
+use tauri::Manager;
 
 use crate::api::{
     fetch_claude_usage, fetch_codex_usage, refresh_claude_token, refresh_codex_token,
@@ -12,24 +15,23 @@ use crate::api::{
 use crate::credentials::{
     read_claude_credentials, read_codex_credentials, ClaudeCredentials, CodexCredentials,
 };
+use crate::dispatch::{
+    DispatchCoordinator, DispatchJob, DispatchJobEnabledInput, DispatchJobUpsertInput,
+    DispatchState,
+};
 use crate::usage_manager::{UsageData, UsageManager, UsageOps};
 
 const CLAUDE_TTL: Duration = Duration::from_secs(120);
 const CODEX_TTL: Duration = Duration::from_secs(60);
 
 pub struct AppState {
-    claude: UsageManager<ClaudeOps>,
-    codex: UsageManager<CodexOps>,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
-    }
+    claude: Arc<UsageManager<ClaudeOps>>,
+    codex: Arc<UsageManager<CodexOps>>,
+    dispatch: Arc<DispatchCoordinator>,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub async fn new(app: &tauri::AppHandle) -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent(
@@ -40,12 +42,18 @@ impl AppState {
             .build()
             .expect("Failed to create reqwest client");
 
-        Self {
-            claude: UsageManager::new(ClaudeOps {
-                client: client.clone(),
-            }),
-            codex: UsageManager::new(CodexOps { client }),
-        }
+        let claude = Arc::new(UsageManager::new(ClaudeOps {
+            client: client.clone(),
+        }));
+        let codex = Arc::new(UsageManager::new(CodexOps { client }));
+        let dispatch = Arc::new(DispatchCoordinator::new(app, claude.clone(), codex.clone()).await?);
+        dispatch.start();
+
+        Ok(Self {
+            claude,
+            codex,
+            dispatch,
+        })
     }
 }
 
@@ -69,7 +77,7 @@ impl UsageData for CodexUsageResponse {
     }
 }
 
-struct ClaudeOps {
+pub(crate) struct ClaudeOps {
     client: reqwest::Client,
 }
 
@@ -115,7 +123,7 @@ impl UsageOps for ClaudeOps {
     }
 }
 
-struct CodexOps {
+pub(crate) struct CodexOps {
     client: reqwest::Client,
 }
 
@@ -177,6 +185,35 @@ async fn get_codex_usage(
 }
 
 #[tauri::command]
+async fn get_dispatch_state(state: tauri::State<'_, AppState>) -> Result<DispatchState, String> {
+    Ok(state.dispatch.get_state().await)
+}
+
+#[tauri::command]
+async fn upsert_dispatch_job(
+    state: tauri::State<'_, AppState>,
+    input: DispatchJobUpsertInput,
+) -> Result<DispatchJob, String> {
+    state.dispatch.upsert_job(input).await
+}
+
+#[tauri::command]
+async fn delete_dispatch_job(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state.dispatch.delete_job(&id).await
+}
+
+#[tauri::command]
+async fn set_dispatch_job_enabled(
+    state: tauri::State<'_, AppState>,
+    input: DispatchJobEnabledInput,
+) -> Result<DispatchJob, String> {
+    state.dispatch.set_job_enabled(input).await
+}
+
+#[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -185,10 +222,19 @@ fn quit_app(app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState::new())
+        .setup(|app| {
+            let state = tauri::async_runtime::block_on(AppState::new(app.handle()))
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            app.manage(state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_claude_usage,
             get_codex_usage,
+            get_dispatch_state,
+            upsert_dispatch_job,
+            delete_dispatch_job,
+            set_dispatch_job_enabled,
             quit_app
         ])
         .run(tauri::generate_context!())

@@ -4,6 +4,7 @@ import { Card, CardContent, ProgressBar, Chip, Spinner, Button } from "@heroui/r
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useClaudeUsage, useCodexUsage, formatTimeUntil } from "./hooks/useUsage";
 import type { StaleReason } from "./types";
+import DispatchSection from "./components/DispatchSection";
 
 function progressColor(remaining: number): "success" | "warning" | "danger" {
   if (remaining > 50) return "success";
@@ -200,6 +201,8 @@ export default function CompactView() {
           ) : null}
         </CardContent>
       </Card>
+
+      <DispatchSection claudeUsage={claudeUsage} codexUsage={codexUsage} compact />
 
       {/* Spacer */}
       <div className="flex-1" />

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ClaudeUsageResponse, CodexUsageResponse } from "../types";
+import type { ClaudeUsageResponse, CodexUsageResponse, DispatchState } from "../types";
 
 export interface UsageState<T> {
   data: T | null;
@@ -101,4 +101,8 @@ export function useClaudeUsage(): UsageState<ClaudeUsageResponse> {
 
 export function useCodexUsage(): UsageState<CodexUsageResponse> {
   return useUsagePoll<CodexUsageResponse>("get_codex_usage", 60_000);
+}
+
+export function useDispatchState(): UsageState<DispatchState> {
+  return useUsagePoll<DispatchState>("get_dispatch_state", 60_000);
 }
