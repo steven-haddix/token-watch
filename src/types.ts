@@ -41,3 +41,73 @@ export interface CodexUsageResponse {
   stale_reason: StaleReason | null;
   retry_after: string | null;
 }
+
+export type DispatchTarget =
+  | "codex"
+  | "claude_generic"
+  | "claude_sonnet"
+  | "claude_opus";
+
+export type DispatchScheduleKind = "once_next_reset" | "every_reset";
+
+export type DispatchRunStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped_no_budget"
+  | "skipped_overlap"
+  | "skipped_unavailable";
+
+export interface DispatchJob {
+  id: string;
+  name: string;
+  target: DispatchTarget;
+  command: string;
+  schedule_kind: DispatchScheduleKind;
+  min_remaining_percent: number;
+  max_time_before_reset_minutes: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DispatchRun {
+  id: string;
+  job_id: string;
+  cycle_key: string;
+  status: DispatchRunStatus;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  summary: string;
+}
+
+export interface ActiveDispatchRun {
+  run_id: string;
+  job_id: string;
+  job_name: string;
+  target: DispatchTarget;
+  started_at: string;
+}
+
+export interface DispatchState {
+  jobs: DispatchJob[];
+  recent_runs: DispatchRun[];
+  active_runs: ActiveDispatchRun[];
+}
+
+export interface DispatchJobUpsertInput {
+  id?: string | null;
+  name: string;
+  target: DispatchTarget;
+  command: string;
+  schedule_kind: DispatchScheduleKind;
+  min_remaining_percent: number;
+  max_time_before_reset_minutes: number;
+  enabled: boolean;
+}
+
+export interface DispatchJobEnabledInput {
+  id: string;
+  enabled: boolean;
+}

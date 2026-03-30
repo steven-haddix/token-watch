@@ -6,10 +6,12 @@ import type { ClaudeUsageResponse, CodexUsageResponse } from "../../src/types";
 
 const useClaudeUsageMock = vi.fn();
 const useCodexUsageMock = vi.fn();
+const useDispatchStateMock = vi.fn();
 
 vi.mock("../../src/hooks/useUsage", () => ({
   useClaudeUsage: () => useClaudeUsageMock(),
   useCodexUsage: () => useCodexUsageMock(),
+  useDispatchState: () => useDispatchStateMock(),
   formatTimeUntil: () => "10m",
 }));
 
@@ -103,10 +105,63 @@ function buildUsageState<T>(overrides: Partial<{
   };
 }
 
+function buildDispatchState(overrides: Partial<{
+  data: {
+    jobs: Array<{
+      id: string;
+      name: string;
+      target: "codex";
+      command: string;
+      schedule_kind: "once_next_reset";
+      min_remaining_percent: number;
+      max_time_before_reset_minutes: number;
+      enabled: boolean;
+      created_at: string;
+      updated_at: string;
+    }>;
+    recent_runs: Array<{
+      id: string;
+      job_id: string;
+      cycle_key: string;
+      status: "succeeded";
+      started_at: string;
+      finished_at: string;
+      exit_code: number;
+      summary: string;
+    }>;
+    active_runs: Array<{
+      run_id: string;
+      job_id: string;
+      job_name: string;
+      target: "codex";
+      started_at: string;
+    }>;
+  } | null;
+  loading: boolean;
+  error: string | null;
+  lastUpdated: Date | null;
+  refresh: () => void;
+}> = {}) {
+  return {
+    data: {
+      jobs: [],
+      recent_runs: [],
+      active_runs: [],
+    },
+    loading: false,
+    error: null,
+    lastUpdated: null,
+    refresh: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("FullView", () => {
   beforeEach(() => {
     useClaudeUsageMock.mockReset();
     useCodexUsageMock.mockReset();
+    useDispatchStateMock.mockReset();
+    useDispatchStateMock.mockReturnValue(buildDispatchState());
   });
 
   it("renders stale auth messaging and auth-required errors", () => {
