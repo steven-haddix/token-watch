@@ -7,8 +7,7 @@ import {
   Spinner,
 } from "@heroui/react";
 import { useClaudeUsage, useCodexUsage, formatTimeUntil } from "./hooks/useUsage";
-import type { WindowUsage, CodexWindowUsage, StaleReason, ClaudeUsageResponse, CodexUsageResponse } from "./types";
-import { mostRecentDate } from "./App";
+import type { WindowUsage, CodexWindowUsage, StaleReason } from "./types";
 
 function progressColor(remaining: number): "success" | "warning" | "danger" {
   if (remaining > 50) return "success";
